@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.pytest_cache/
+.ruff_cache/
+
+# Raw data (present locally, never committed)
+data/raw/*
+!data/raw/.gitkeep
+
+# Generated/processed data
+data/processed/
+
+# Per-run logs and raw results
+results/raw/*
+!results/raw/.gitkeep
+results/logs/*
+!results/logs/.gitkeep
+
+# Keep aggregate tables and final figures
+# results/tables/
+# results/figures/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Kaggle credentials
+kaggle.json
+.kaggle/
+
+# Large archives
+*.zip
+*.7z

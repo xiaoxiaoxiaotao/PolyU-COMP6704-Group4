@@ -1,0 +1,421 @@
+# Experiment Plan — Cost-Sensitive SVM for Credit Card Fraud Detection
+
+This is the project's working document. It defines **what we build, what we run, and where
+everything lives**. It is intentionally a plan, not an implementation: no algorithm or
+experiment script is included in this initial commit.
+
+The proposal is in [`docs/proposal/COMP6704_Group4_SVM_Research_Proposal.pdf`](docs/proposal/COMP6704_Group4_SVM_Research_Proposal.pdf).
+
+---
+
+## 1. Project in one paragraph
+
+Credit-card fraud detection is a binary decision with **0.172% positives**, **asymmetric
+costs** (a missed fraud costs more than a false alarm), **noisy labels**, and a **training
+time budget**. We model it as a **cost-sensitive soft-margin SVM**: a convex QP with
+class-dependent penalties `C_i = C * w_{y_i}` and `w_+ / w_- = c_FN / c_FP`. We compare five
+solvers — SMO, weighted Pegasos, fixed-ρ ADMM, PA-ADMM (Pegasos-warm-started adaptive ADMM),
+and a CVXPY/ECOS interior-point baseline — under one protocol. The primary metric is
+**time-to-cost-tolerance**, not accuracy.
+
+There is **one application only**: the ULB credit-card dataset. Synthetic data are controlled
+stress tests of the same fraud problem (fraud rate, label noise, cost ratio, scaling), not a
+second application.
+
+---
+
+## 2. Repository contract — where everything goes
+
+### Current contents
+
+```
+EXPERIMENTS.md                         # this document
+docs/proposal/
+  COMP6704_Group4_SVM_Research_Proposal.pdf
+data/
+  raw/
+    .gitkeep
+    creditcard.csv                     # 144 MB; present locally, ignored by Git
+.gitignore
+```
+
+### Directories to create when implementation starts
+
+| Path | Contents | Committed? |
+|---|---|---|
+| `data/raw/creditcard.csv` | Raw ULB CSV | **No** (ignored) |
+| `data/processed/` | Optional cleaned/standardized arrays or caches | **No** (ignored) |
+| `data/splits/` | Reproducible split indices (`stratified_seed0.json`, …, `chronological_seed0.json`) | **Yes** (small, deterministic) |
+| `src/` | Reusable library code (data, costs, metrics, solvers, evaluation) | **Yes** |
+| `experiments/` | Runnable experiment entry points | **Yes** |
+| `configs/` | Optional YAML configs for experiments | **Yes** |
+| `results/raw/` | One JSON per run | **No** (ignored) |
+| `results/tables/` | Aggregated CSV tables | **Yes** |
+| `results/figures/` | Final plots (PDF/PNG) | **Yes** |
+| `results/logs/` | Run logs | **No** (ignored) |
+
+Rules:
+
+- Never commit `data/raw`, `data/processed`, `results/raw`, or `results/logs`.
+- Commit split indices and aggregated tables/figures.
+- Keep one owner per file; coordinate before editing another WP's module.
+
+---
+
+## 3. Data
+
+### 3.1 Dataset and current status
+
+| Item | Value |
+|---|---|
+| Name | ULB Credit Card Fraud Detection |
+| Local file | `data/raw/creditcard.csv` |
+| Shape | **284,807 rows × 31 columns** (verified) |
+| Columns | `Time`, `V1`–`V28`, `Amount`, `Class` |
+| Target | `Class` (1 = fraud, 0 = legitimate) |
+| Positives | **492** (0.172%) |
+| Duplicates | 1,081 exact duplicate rows; drop before splitting |
+| Source | Kaggle `mlg-ulb/creditcardfraud`; downloaded via the public Hugging Face mirror `David-Egea/Creditcard-fraud-detection` |
+
+The file is already downloaded and verified. It is **not** in Git. If another member needs it,
+download the same file from the Kaggle page or the public mirror and confirm the shape and
+fraud count before use.
+
+### 3.2 Feature policy
+
+- `Time` is **not** a model feature; it is used only for the chronological split.
+- `V1`–`V28` are the released PCA components; keep them as-is.
+- `Amount` is standardized using **training-fold** mean and standard deviation only.
+- Labels are mapped to `y ∈ {-1, +1}`.
+- Thresholds, `C`, and all hyperparameters are selected on validation data only.
+
+### 3.3 Splits
+
+| Split | Protocol | Seeds | Use |
+|---|---|---|---|
+| Stratified | 70% train / 15% validation / 15% test | 0–4 | Main comparison |
+| Chronological | Sort by `Time`; 70% train / 15% validation / 15% test | 0 | Temporal robustness check |
+
+- Save **integer row indices** as JSON in `data/splits/`; do not copy the data.
+- All methods use the same split files.
+- For imbalance stress tests, subsample **training positives only**; validation/test stay fixed.
+- For label-noise stress tests, flip labels in the **training set only**; test labels stay clean.
+- For the chronological check, the test set is the latest 15% of transactions; report the
+  distribution shift explicitly.
+
+### 3.4 When re-downloading
+
+Canonical Kaggle dataset: `mlg-ulb/creditcardfraud`.
+
+Manual options:
+
+- Kaggle CLI: `kaggle datasets download -d mlg-ulb/creditcardfraud -p data/raw --unzip`
+- Public mirror used here:
+  `https://huggingface.co/datasets/David-Egea/Creditcard-fraud-detection`
+
+After downloading, verify: shape `(284807, 31)`, columns include `Class`, 492 positives,
+`Class ∈ {0, 1}`. Record the SHA-256 in the team chat or in this document.
+
+---
+
+## 4. Code to implement
+
+### 4.1 Common interface
+
+Every solver implements the same protocol:
+
+```python
+class BinarySVM:
+    def fit(self, X, y, C_per_sample, **kwargs): ...
+    def decision_function(self, X): ...
+    def predict(self, X): ...
+```
+
+- `X`: `float64` array `(n, d)`; `y`: `int8` array `(n,)` in `{-1, +1}`.
+- `C_per_sample`: `float64` array `(n,)`; `C_i = C * w_{y_i}`, normalized to mean one.
+- After `fit`, record: `w`, `b`, `n_iter`, `converged`, `objective_history`,
+  `fit_time_sec`, `peak_memory_mb`; method-specific state (`alphas`, `rho_history`).
+- `predict` returns `{-1, +1}`; `decision_function` returns raw scores.
+
+### 4.2 Modules under `src/`
+
+| File | What to implement | Owner |
+|---|---|---|
+| `src/data.py` | Load CSV, drop duplicates, stratified/chronological splits, standardize `Amount`, build NumPy arrays, save/load split JSON, synthetic fraud generator, positive subsampling | WP4 |
+| `src/costs.py` | Cost matrix, normalized class weights, per-sample `C_i`, expected cost | WP1 |
+| `src/metrics.py` | Cost per example, PR-AUC, recall@FPR, balanced accuracy, cost-minimizing threshold, bootstrap CI, Wilcoxon test | WP4 |
+| `src/svm_smo.py` | SMO / dual coordinate descent with per-class bounds; linear + optional RBF; kernel cache; KKT stopping; recover `w`, `b` | WP2 |
+| `src/svm_pegasos.py` | Weighted Pegasos: primal stochastic subgradient, learning-rate schedule, optional iterate averaging | WP1 |
+| `src/svm_admm.py` | Fixed-ρ ADMM and PA-ADMM: ridge solve, closed-form z-update, residuals, adaptive ρ, over-relaxation, warm start | WP3 |
+| `src/baseline_cvxpy.py` | CVXPY/ECOS cost-sensitive linear SVM on a stratified subset | WP1 |
+| `src/evaluate.py` | Unified fit/evaluate runner, time-to-tolerance, threshold selection, JSON logging, aggregation | WP4 |
+| `src/utils.py` | YAML loading/merging, seeding, timer, logger, single-thread configuration | Shared |
+
+### 4.3 Algorithm requirements
+
+#### SMO (WP2)
+
+- Dual: `0 <= alpha_i <= C_i`, `sum alpha_i y_i = 0`.
+- Working-set selection: maximal-violating pair, optionally second-order.
+- Analytic two-variable update; clip to `[0, C_i]`.
+- Maintain `g_i = y_i f(x_i) - 1`; stop on maximal KKT violation `< tol`.
+- Linear kernel; RBF only on a small subset for a qualitative check.
+- Recover `w = sum alpha_i y_i x_i`; recover `b` from free support vectors.
+- Log objective and KKT violation histories.
+
+#### Weighted Pegasos (WP1)
+
+- Primal objective: `0.5||w||^2 + sum C_i max(0, 1 - y_i(w^T x_i + b))`.
+- Update when `y_i f(x_i) < 1`:
+  `w <- (1 - eta_t * lambda) w + eta_t * C_i * y_i * x_i`,
+  `b <- b + eta_t * C_i * y_i`.
+- `eta_t = 1 / (lambda * t)`; document how `lambda` is tied to `C` and `n`.
+- Record objective history; optional iterate averaging; full-data and mini-batch modes.
+
+#### ADMM and PA-ADMM (WP3)
+
+- Splitting: `z_i = y_i (w^T x_i + b)`.
+- Augmented Lagrangian with dual `u` and penalty `rho`.
+- `(w,b)`-update: ridge regression; cache `X^T X`; Cholesky; refactor when `rho` changes.
+- `z`-update: `a_i = y_i(w^T x_i + b) - u_i/rho`;
+  `z_i = a_i` if `a_i >= 1`, else `min(1, a_i + C_i/rho)`.
+- Dual update, primal/dual residuals, stopping on residuals + relative objective gap.
+- Adaptive `rho`: multiply/divide by 2 when residuals differ by an order of magnitude;
+  rescale `u`.
+- Over-relaxation with `alpha ∈ [1.5, 1.8]`.
+- PA-ADMM: weighted Pegasos warm start (`K` epochs), then the adaptive ADMM loop.
+- Log `rho_history`, residuals, objective history.
+
+#### CVXPY baseline (WP1)
+
+- Primal cost-sensitive SVM with per-sample `C_i`; ECOS solver (fallback SCS).
+- Stratified subset (default 20k); record subset size and solver status.
+- Returns `w`, `b`, objective, solve time.
+
+### 4.4 Experiment entry points under `experiments/`
+
+| File | Runs |
+|---|---|
+| `run_correctness.py` | SMO vs LIBSVM; ADMM/PA-ADMM vs CVXPY on a 10k subset |
+| `run_main.py` | `main_fast` (50k, 3 seeds) and `main_full` (284k, 5 seeds) |
+| `run_cost_sweep.py` | Cost ratios `1, 3, 5, 10, 20, 50` on a 50k subset |
+| `run_ablation.py` | PA-ADMM component ablation |
+| `run_stress.py` | Fraud-rate, label-noise and chronological stress tests |
+| `run_scaling.py` | Synthetic `n = 10k–200k`, `d = 20` |
+
+Configs under `configs/` are optional but recommended: keep all paths, seeds, cost ratios,
+grids, tolerances and time budgets in YAML rather than hard-coding them.
+
+---
+
+## 5. Experiments to run
+
+| ID | Data | Methods | Cost ratios | Seeds | Purpose |
+|---|---|---|---|---|---|
+| `correctness` | 10k stratified subset | SMO vs LIBSVM; ADMM/PA-ADMM vs CVXPY | 10:1 | 1 | Verify objectives, KKT/residuals, predictions |
+| `main_fast` | 50k stratified subset | SMO (10k), Pegasos, ADMM, PA-ADMM, CVXPY (10k) | 10, 20, 50 | 3 | Fast iteration; debug the matrix |
+| `main_full` | full 284,807; SMO on 10k; CVXPY on 20k | SMO, Pegasos, ADMM, PA-ADMM, CVXPY | 10, 20, 50 | 5 | Final numbers for the report |
+| `cost_sweep` | 50k subset | Pegasos, ADMM, PA-ADMM | 1, 3, 5, 10, 20, 50 | 1 | How the ranking changes with cost asymmetry |
+| `ablation` | full data | PA-ADMM variants | 20:1 | 3 | `K ∈ {0,5,10,20}`; adaptive ρ on/off; `alpha ∈ {1.0,1.5,1.8}`; `rho0 ∈ {0.1,1,10}` |
+| `stress_imbalance` | training positives subsampled to 0.1/0.5/1/5/10% | Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Extreme-imbalance behaviour |
+| `stress_noise` | 5%/10% training labels flipped | SMO (10k), Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Objective–generalization gap |
+| `temporal` | chronological 70/15/15 | Pegasos, ADMM, PA-ADMM | 20:1 | 1–3 | Distribution drift |
+| `scaling` | synthetic `n = 10k, 25k, 50k, 100k, 200k`; `d = 20` | Pegasos, ADMM, PA-ADMM | 10:1 | 3 | Runtime/memory vs `n` |
+
+### 5.1 Practical caps
+
+- SMO: `n <= 10k`; if the kernel cache exceeds the memory budget, reduce to 5k and record the
+  cap. Full 284k is intentionally not attempted; the **O(n²) memory wall is a finding**.
+- CVXPY: `n <= 20k` (stratified subset).
+- ADMM/PA-ADMM: full data is feasible because `d = 30` and the linear system is 31×31.
+- Pegasos: full data; O(d) per iteration.
+- Per-fit time budget: 300 s for fast/correctness runs, 900 s for full runs. Log timeouts and
+  OOM as failures; do not drop them silently.
+
+---
+
+## 6. Metrics and evaluation protocol
+
+### 6.1 Primary metric
+
+**`time_to_tolerance`** — wall-clock seconds to reach a relative weighted objective gap
+`<= tol` (default `1e-4`; `1e-3` for full data). If a method does not reach tolerance within
+the budget, record `reached = false`, `time_to_tolerance = null`, and the final gap. This is
+the main "faster" claim.
+
+### 6.2 Secondary metrics
+
+- `cost_per_example = (c_FN * FN + c_FP * FP) / n_test`;
+- `pr_auc` (average precision);
+- `recall_at_fpr_0.001` and `recall_at_fpr_0.01`;
+- `balanced_accuracy`;
+- `objective` (weighted training objective) and `relative_gap`;
+- `n_iter`, `fit_time_sec`, `peak_memory_mb`, `rho_history` (ADMM/PA-ADMM).
+
+### 6.3 Reference objective
+
+- Correctness runs: CVXPY/LIBSVM reference.
+- Full-data runs: the best observed training objective among the methods on the same split.
+- Store `reference_objective` in every JSON so the gap is reproducible.
+- Never use test data to choose the reference or the threshold.
+
+### 6.4 Threshold and tuning
+
+- Select the decision threshold on **validation** to minimize validation cost.
+- Select base `C` on validation cost from `{0.01, 0.1, 1, 10, 100}`.
+- Class weights are fixed by the cost ratio; normalize to mean one.
+- SMO: linear kernel for the main matrix; RBF only on a 10k subset.
+- Pegasos: `C` grid and learning-rate/epoch settings.
+- ADMM/PA-ADMM: `rho0`, `alpha`, adaptive ρ; PA-ADMM also `K`.
+- No test-set tuning; no per-method early stopping on test.
+
+### 6.5 Fairness controls
+
+- Same split indices, `C_i`, tolerance, single-threaded execution, and hardware.
+- Same wall-clock budget per fit; report both per-iteration and per-time behaviour.
+- Warm start is used **only** by PA-ADMM; cold-start ADMM is the baseline.
+- Record CPU/RAM in run metadata.
+- Five seeds for `main_full`; mean ± std, bootstrap 95% CI, Wilcoxon signed-rank tests.
+
+---
+
+## 7. Results — where they go
+
+```
+results/
+  raw/
+    {experiment}/
+      {dataset}/
+        {method}/
+          ratio-{r}/
+            seed-{s}.json
+  tables/
+    {experiment}_{metric}.csv
+  figures/
+    {experiment}_{plot}.pdf
+  logs/
+    {experiment}_{timestamp}.log
+```
+
+### 7.1 JSON schema (one run)
+
+```json
+{
+  "experiment": "main_full",
+  "dataset": "ulb",
+  "method": "pa_admm",
+  "cost_ratio": 20,
+  "seed": 0,
+  "n_train": 199364,
+  "n_val": 42721,
+  "n_test": 42722,
+  "d": 30,
+  "C": 1.0,
+  "hyperparams": {"K": 10, "rho0": 1.0, "alpha": 1.6, "adaptive_rho": true},
+  "fit_time_sec": 42.1,
+  "n_iter": 87,
+  "converged": true,
+  "objective": 1234.5,
+  "reference_objective": 1200.0,
+  "relative_gap": 0.0287,
+  "time_to_tolerance_sec": 38.4,
+  "reached_tolerance": true,
+  "pr_auc": 0.81,
+  "recall_at_fpr_0.001": 0.72,
+  "recall_at_fpr_0.01": 0.88,
+  "cost_per_example": 0.31,
+  "balanced_accuracy": 0.84,
+  "peak_memory_mb": 512.0
+}
+```
+
+### 7.2 Tables and figures
+
+- Tables: one row per run; aggregated tables with mean/std and `n_seeds`.
+- Figures: convergence (objective vs time), time-to-tolerance bars, cost vs cost ratio,
+  PR curves, recall@FPR, scaling (runtime/memory vs n), ρ sensitivity.
+- Final figures for the report go in `results/figures/`; slides reuse them.
+
+### 7.3 Naming rules
+
+- Experiment IDs: `correctness`, `main_fast`, `main_full`, `cost_sweep`, `ablation`,
+  `stress_imbalance`, `stress_noise`, `temporal`, `scaling`.
+- Method IDs: `smo`, `pegasos`, `admm`, `pa_admm`, `cvxpy`.
+- Dataset IDs: `ulb`, `synthetic`.
+- Cost ratio: integer `c_FN/c_FP` (`ratio-20`).
+- Seed: `seed-0`, no padding.
+- Never overwrite a run; use a new timestamp/log or config hash.
+
+---
+
+## 8. Ownership and Git workflow
+
+| WP | Owner | Files | Branch |
+|---|---|---|---|
+| WP1 | Member 1 | `src/costs.py`, `src/svm_pegasos.py`, `src/baseline_cvxpy.py`, theory notes | `feat/costs-pegasos` |
+| WP2 | Member 2 | `src/svm_smo.py`, SMO tests | `feat/smo` |
+| WP3 | Member 3 | `src/svm_admm.py`, ADMM/PA-ADMM tests | `feat/admm` |
+| WP4 | Member 4 | `src/data.py`, `src/metrics.py`, `src/evaluate.py`, `experiments/`, `configs/`, results | `feat/eval` |
+
+Rules:
+
+- One owner per file; ask before editing another WP's module.
+- Every PR: tests pass, a small run is logged, and this document is updated if the protocol
+  changes.
+- Do not commit raw data, processed data, virtual environments, or `results/raw`.
+- Commit split indices and aggregated tables/figures.
+- PR title: `feat(smo): ...`, `fix(admm): ...`, `docs(experiments): ...`.
+- One reviewer from another WP before merge.
+
+---
+
+## 9. Definition of done
+
+A work package is done when:
+
+- the module implements the documented interface;
+- unit tests pass on a small synthetic dataset;
+- correctness is checked against LIBSVM or CVXPY (objective/accuracy within tolerance);
+- a smoke run produces a JSON in `results/raw/` with all required fields;
+- the relevant section of this document is updated.
+
+The whole project is done when:
+
+- `main_full`, `cost_sweep`, `ablation`, `stress_*`, `temporal`, and `scaling` have run;
+- aggregated tables and figures are in `results/`;
+- the report and 40-minute presentation use numbers generated from `results/tables/`;
+- a fresh clone can reproduce the main tables from the committed configs and split indices.
+
+---
+
+## 10. Risks and practical notes
+
+- **Extreme imbalance:** PR-AUC and recall@FPR are noisy; use five seeds, bootstrap CIs, and
+  report variance. Do not report a single split's accuracy.
+- **Cost ratios are assumptions:** the main ratio grid is illustrative. Report the full sweep
+  and frame conclusions as sensitivity, not a deployment recommendation.
+- **SMO memory:** O(n²) kernel memory; cap at 5k–10k and report the cap. The memory wall is a
+  finding, not a bug.
+- **ADMM's dense solve:** `d = 30` makes the 31×31 system cheap; do not extrapolate to
+  high-dimensional data without a sparse-aware variant.
+- **PA-ADMM may not win:** report the component ablation and the negative result. The
+  cost-aware benchmark and regime map remain the contribution.
+- **Data leakage:** fit standardization, thresholds, and hyperparameters on training/validation
+  only. `Time` is not a feature in the main model.
+- **Hardware:** run single-threaded on the same machine for the main comparison; record CPU/RAM.
+- **Missing rubric:** the Canvas instruction file was not in the downloaded course folder. If
+  the report format/rubric appears, update this plan and the report.
+
+---
+
+## 11. TODO
+
+- [x] Create repository and directory contract.
+- [x] Download and verify ULB data: `data/raw/creditcard.csv`, 284,807 × 31, 492 frauds.
+- [x] Add the proposal PDF under `docs/proposal/`.
+- [ ] Implement data/cost/metric utilities and split files.
+- [ ] Implement SMO, Pegasos, ADMM/PA-ADMM, CVXPY baseline.
+- [ ] Implement the unified evaluation runner and experiment entry points.
+- [ ] Run `correctness` and `main_fast`.
+- [ ] Freeze configs and run `main_full`.
+- [ ] Produce tables/figures for the report and slides.
