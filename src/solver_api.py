@@ -136,23 +136,47 @@ def validate_predictions(
     return values.astype(np.int8)
 
 
-def filtered_fit_kwargs(fit_callable: Any, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep only kwargs accepted by ``fit``; pass all if it has ``**kwargs``."""
+def _accepted_fit_parameters(fit_callable: Any) -> set[str] | None:
+    """Return accepted keyword names, or None if ``fit`` accepts ``**kwargs``."""
     try:
         signature = inspect.signature(fit_callable)
     except (TypeError, ValueError):
-        return dict(kwargs)
+        return None
     if any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
     ):
-        return dict(kwargs)
-    accepted = {
+        return None
+    return {
         name
         for name, parameter in signature.parameters.items()
         if parameter.kind
         in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     }
+
+
+def validate_fit_kwargs(
+    fit_callable: Any,
+    kwargs: Mapping[str, Any],
+) -> None:
+    """Fail loudly instead of silently dropping configured hyperparameters."""
+    accepted = _accepted_fit_parameters(fit_callable)
+    if accepted is None:
+        return
+    missing = sorted(key for key in kwargs if key not in accepted)
+    if missing:
+        raise TypeError(
+            "fit() does not accept required keyword(s) "
+            f"{missing}; declare them explicitly or add **kwargs to fit(). "
+            "Configured values must not be silently ignored."
+        )
+
+
+def filtered_fit_kwargs(fit_callable: Any, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """Return kwargs accepted by ``fit``; pass all if it has ``**kwargs``."""
+    accepted = _accepted_fit_parameters(fit_callable)
+    if accepted is None:
+        return dict(kwargs)
     return {key: value for key, value in kwargs.items() if key in accepted}
 
 
@@ -344,6 +368,7 @@ def check_solver_contract(
     kwargs = {"seed": 0, "tol": 1e-4, "time_budget_sec": 300.0}
     kwargs.update(dict(fit_kwargs or {}))
     try:
+        validate_fit_kwargs(model.fit, kwargs)
         start = time.perf_counter()
         model.fit(
             X,
@@ -355,7 +380,7 @@ def check_solver_contract(
     except Exception as exc:
         return {
             "passed": False,
-            "errors": [f"fit failed: {type(exc).__name__}: {exc}"],
+            "errors": [f"fit call contract failed: {type(exc).__name__}: {exc}"],
             "warnings": warnings,
             "details": details,
         }

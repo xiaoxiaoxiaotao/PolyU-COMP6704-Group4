@@ -8,6 +8,7 @@ from src.solver_api import (
     check_solver_contract,
     compute_primal_objective,
     extract_history,
+    validate_fit_kwargs,
     validate_training_data,
 )
 
@@ -58,6 +59,39 @@ class ScaledHistorySVM(ToyStatefulSVM):
         super().fit(X, y, C_per_sample, **kwargs)
         self.objective_history = [value * 2.0 for value in self.objective_history]
         return self
+
+
+class StrictFitSVM(ToyStatefulSVM):
+    """No **kwargs: configured but undeclared values must not be dropped."""
+
+    def fit(
+        self,
+        X,
+        y,
+        C_per_sample,
+        seed=0,
+        tol=1e-4,
+        time_budget_sec=5400.0,
+    ):
+        return super().fit(X, y, C_per_sample)
+
+
+def test_fit_kwargs_validation_rejects_silent_drop() -> None:
+    X, y, C = _data()
+    with pytest.raises(TypeError, match="rho0"):
+        validate_fit_kwargs(
+            StrictFitSVM().fit,
+            {"seed": 0, "tol": 1e-4, "time_budget_sec": 10, "rho0": 1.0},
+        )
+    report = check_solver_contract(
+        StrictFitSVM,
+        X,
+        y,
+        C,
+        fit_kwargs={"rho0": 1.0},
+    )
+    assert report["passed"] is False
+    assert any("rho0" in error for error in report["errors"])
 
 
 def _data(n: int = 200, d: int = 4):

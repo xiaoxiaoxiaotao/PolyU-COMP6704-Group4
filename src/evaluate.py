@@ -42,6 +42,7 @@ from .solver_api import (
     extract_vector,
     filtered_fit_kwargs,
     get_attr,
+    validate_fit_kwargs,
 )
 from .utils import configure_single_thread, get_logger, save_json, set_seed
 
@@ -684,6 +685,7 @@ def run_one(
         failure_traceback: str | None = None
         try:
             model = method_class()
+            validate_fit_kwargs(model.fit, fit_kwargs)
             filtered_kwargs = filtered_fit_kwargs(model.fit, fit_kwargs)
             set_seed(seed)
             with _hard_timeout(hard_timeout_sec):

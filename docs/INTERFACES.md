@@ -103,8 +103,9 @@ Put hyperparameters in `fit`, not in the constructor. The harness passes:
 | `time_budget_sec` | per-fit wall-clock budget; return the best iterate and set `converged=False` if you hit it |
 | method-specific kwargs | from `configs/*.yaml`, e.g. `K`, `rho0`, `alpha`, `adaptive_rho`, `max_iter`, kernel options |
 
-`fit` should return `self`. The harness filters kwargs by the signature; you may
-declare explicit keyword arguments or `**kwargs`.
+`fit` should return `self`. Declare every harness/configured keyword explicitly
+or add `**kwargs`. The harness validates the signature and **raises** if a
+configured value would be silently dropped; it does not ignore hyperparameters.
 
 ### `C_per_sample` is already cost-weighted
 
@@ -408,6 +409,8 @@ PA-ADMM inherits or shares the ADMM loop and additionally sets
 - Applying class weights inside the solver (double weighting).
 - Reporting the objective divided by `n` while the history uses the sum (or
   vice versa).
+- Declaring a `fit` signature without `**kwargs` and without an explicitly
+  configured hyperparameter (the harness now raises instead of dropping it).
 - Omitting `time_history` or providing only one objective point (no primary
   metric; the harness will report `null`).
 - Having a `time_history` whose length does not match `objective_history`.
