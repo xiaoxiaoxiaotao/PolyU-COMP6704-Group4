@@ -1,0 +1,18 @@
+# Fair all-five comparison on one common 10k training subset.
+# Every method sees exactly the same rows and the same 70/15/15 split.
+experiment: main_capped
+methods: [smo, pegasos, admm, pa_admm, cvxpy]
+seeds: [0, 1, 2]
+cost_ratios: [10, 20, 50]
+tolerance: 0.001
+time_budget_sec: 5400
+reference_method: null
+data:
+  subset_n: 10000
+  subset_seed: 0
+  split_protocol: stratified
+  use_saved_splits: false
+notes: >-
+  All five methods receive exactly the same 10k training subset. This is the
+  fair all-method fallback if SMO/CVXPY cannot complete the full-data main_full
+  matrix. No per-method caps.

@@ -1,0 +1,51 @@
+# PA-ADMM component ablation on the full cleaned ULB dataset.
+# C is fixed for component isolation; thresholds are still validation-only.
+experiment: ablation
+methods: []
+seeds: [0, 1, 2]
+cost_ratios: [20]
+C_grid: [1.0]
+tolerance: 0.001
+time_budget_sec: 5400
+reference_method: null
+data:
+  subset_n: null
+  split_protocol: stratified
+  use_saved_splits: true
+method_variants:
+  - name: admm-cold
+    method: admm
+    method_kwargs: {rho0: 1.0, adaptive_rho: false, alpha: 1.0}
+  - name: pa-K0
+    method: pa_admm
+    method_kwargs: {K: 0, rho0: 1.0, adaptive_rho: true, alpha: 1.6}
+  - name: pa-K5
+    method: pa_admm
+    method_kwargs: {K: 5, rho0: 1.0, adaptive_rho: true, alpha: 1.6}
+  - name: pa-K10
+    method: pa_admm
+    method_kwargs: {K: 10, rho0: 1.0, adaptive_rho: true, alpha: 1.6}
+  - name: pa-K20
+    method: pa_admm
+    method_kwargs: {K: 20, rho0: 1.0, adaptive_rho: true, alpha: 1.6}
+  - name: pa-adaptive-off
+    method: pa_admm
+    method_kwargs: {K: 10, rho0: 1.0, adaptive_rho: false, alpha: 1.6}
+  - name: pa-alpha-1.0
+    method: pa_admm
+    method_kwargs: {K: 10, rho0: 1.0, adaptive_rho: true, alpha: 1.0}
+  - name: pa-alpha-1.5
+    method: pa_admm
+    method_kwargs: {K: 10, rho0: 1.0, adaptive_rho: true, alpha: 1.5}
+  - name: pa-alpha-1.8
+    method: pa_admm
+    method_kwargs: {K: 10, rho0: 1.0, adaptive_rho: true, alpha: 1.8}
+  - name: pa-rho0-0.1
+    method: pa_admm
+    method_kwargs: {K: 10, rho0: 0.1, adaptive_rho: true, alpha: 1.6}
+  - name: pa-rho0-10
+    method: pa_admm
+    method_kwargs: {K: 10, rho0: 10.0, adaptive_rho: true, alpha: 1.6}
+notes: >-
+  K in {0,5,10,20}; adaptive rho on/off; alpha in {1.0,1.5,1.8};
+  rho0 in {0.1,1,10}. C=1 for all variants to isolate algorithm components.

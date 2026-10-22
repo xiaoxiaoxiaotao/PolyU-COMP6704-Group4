@@ -1,0 +1,17 @@
+# Fast iteration matrix on a 50k stratified subset.
+experiment: main_fast
+methods: [smo, pegasos, admm, pa_admm, cvxpy]
+seeds: [0, 1, 2]
+cost_ratios: [10, 20, 50]
+tolerance: 0.001
+time_budget_sec: 5400
+reference_method: null
+data:
+  subset_n: 50000
+  subset_seed: 0   # same 50k subset for all seeds; seed controls the 70/15/15 split
+  split_protocol: stratified
+  use_saved_splits: false
+notes: >-
+  All five methods receive exactly the same 50k training subset and split.
+  SMO/CVXPY may hit the 90-minute hard timeout; failures are recorded, not
+  replaced by another method's result.
