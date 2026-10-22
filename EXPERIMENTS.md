@@ -39,10 +39,11 @@ data/
 .gitignore
 ```
 
-The WP4 branch (`feat/eval`) adds `src/` (data/metrics/evaluation/utils only),
-`configs/`, `experiments/`, `tests/`, `data/splits/`, `docs/report/`, `docs/slides/`,
+The WP4 branch (`feat/eval`) adds `src/` (data/metrics/evaluation/solver API/utils),
+`configs/`, `experiments/`, `tests/`, `data/splits/`, `docs/INTERFACES.md`,
 and placeholder tables/figures under `results/`. Solver modules and `src/costs.py`
-remain owned by WP1–WP3 and are not present yet.
+remain owned by WP1–WP3 and are not present yet. The solver-facing contract is in
+[`docs/INTERFACES.md`](docs/INTERFACES.md).
 
 ### Directories to create when implementation starts
 
@@ -157,9 +158,14 @@ class BinarySVM:
 
 - `X`: `float64` array `(n, d)`; `y`: `int8` array `(n,)` in `{-1, +1}`.
 - `C_per_sample`: `float64` array `(n,)`; `C_i = C * w_{y_i}`, normalized to mean one.
-- After `fit`, record: `w`, `b`, `n_iter`, `converged`, `objective_history`,
-  `fit_time_sec`, `peak_memory_mb`; method-specific state (`alphas`, `rho_history`).
+- After `fit`, record: `w`, `b`, `n_iter`, `converged`, `objective`,
+  `objective_history`, `time_history`; method-specific state (`alphas`, `rho_history`).
+  The harness measures `fit_time_sec` and process peak memory.
 - `predict` returns `{-1, +1}`; `decision_function` returns raw scores.
+- Solver owners must implement the module/class names in §4.2 and pass
+  `experiments/check_solver.py --method <name>` before running experiments.
+  Full implementation details, templates, objective convention, and common
+  mistakes are in [`docs/INTERFACES.md`](docs/INTERFACES.md).
 
 ### 4.2 Modules under `src/`
 
@@ -173,6 +179,7 @@ class BinarySVM:
 | `src/svm_admm.py` | Fixed-ρ ADMM and PA-ADMM: ridge solve, closed-form z-update, residuals, adaptive ρ, over-relaxation, warm start | WP3 |
 | `src/baseline_cvxpy.py` | CVXPY/ECOS cost-sensitive linear SVM on a stratified subset | WP1 |
 | `src/evaluate.py` | Unified fit/evaluate runner, time-to-tolerance, threshold selection, JSON logging, aggregation | WP4 |
+| `src/solver_api.py` | Solver protocol, validation helpers, base class, contract checker | WP4 |
 | `src/utils.py` | YAML loading/merging, seeding, timer, logger, single-thread configuration | Shared |
 
 ### 4.3 Algorithm requirements
@@ -226,6 +233,7 @@ class BinarySVM:
 | `run_ablation.py` | PA-ADMM component ablation |
 | `run_stress.py` | Fraud-rate, label-noise and chronological stress tests |
 | `run_scaling.py` | Synthetic `n = 10k–200k`, `d = 20` |
+| `check_solver.py` | Contract check for one solver on synthetic data (WP2/WP3 handoff) |
 
 Configs under `configs/` are optional but recommended: keep all paths, seeds, cost ratios,
 grids, tolerances and time budgets in YAML rather than hard-coding them.
@@ -379,7 +387,7 @@ results/
 | WP1 | Member 1 | `src/costs.py`, `src/svm_pegasos.py`, `src/baseline_cvxpy.py`, theory notes | `feat/costs-pegasos` |
 | WP2 | Member 2 | `src/svm_smo.py`, SMO tests | `feat/smo` |
 | WP3 | Member 3 | `src/svm_admm.py`, ADMM/PA-ADMM tests | `feat/admm` |
-| WP4 | Member 4 | `src/data.py`, `src/metrics.py`, `src/evaluate.py`, `experiments/`, `configs/`, results | `feat/eval` |
+| WP4 | Member 4 | `src/data.py`, `src/metrics.py`, `src/evaluate.py`, `src/solver_api.py`, `experiments/`, `configs/`, results | `feat/eval` |
 
 Rules:
 
@@ -438,8 +446,9 @@ The whole project is done when:
 - [x] Download and verify ULB data: `data/raw/creditcard.csv`, 284,807 × 31, 492 frauds.
 - [x] Add the proposal PDF under `docs/proposal/`.
 - [x] Implement WP4 data/metric utilities, reproducible split files, evaluation harness,
-      configs, and experiment entry points.
+      configs, experiment entry points, and the solver contract/checker.
 - [ ] Implement `src/costs.py` (WP1) and the five solver modules (WP1–WP3).
+      Start with `docs/INTERFACES.md` and `experiments/check_solver.py`.
 - [ ] Run `correctness` and `main_fast` (blocked on solver modules).
 - [ ] Freeze configs and run `main_full`.
 - [ ] Produce final tables/figures; empty tables and "pending solver integration"

@@ -9,7 +9,6 @@ aggregation, so every method sees the same protocol.
 from __future__ import annotations
 
 import importlib
-import inspect
 import json
 import math
 import os
@@ -18,7 +17,7 @@ import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -30,6 +29,14 @@ from .metrics import (
     evaluate_scores,
     precision_recall_points,
     select_threshold_min_cost,
+)
+from .solver_api import (
+    BinarySVM,
+    compute_primal_objective,
+    extract_history,
+    extract_vector,
+    filtered_fit_kwargs,
+    get_attr,
 )
 from .utils import configure_single_thread, get_logger, save_json, set_seed
 
@@ -88,27 +95,10 @@ class MethodUnavailableError(RuntimeError):
     """Raised when a registered solver module/class is not available."""
 
 
-@runtime_checkable
-class BinarySVM(Protocol):
-    """Protocol every solver must implement."""
-
-    def fit(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        C_per_sample: np.ndarray,
-        **kwargs: Any,
-    ) -> Any: ...
-
-    def decision_function(self, X: np.ndarray) -> np.ndarray: ...
-
-    def predict(self, X: np.ndarray) -> np.ndarray: ...
-
-
 def load_method(
     name: str,
     extra_methods: Mapping[str, Any] | None = None,
-) -> Any:
+) -> type[BinarySVM]:
     """Lazily import and return a solver class from the registry."""
     if extra_methods and name in extra_methods:
         return extra_methods[name]
@@ -131,9 +121,15 @@ def load_method(
             f"Method '{name}' is unavailable: '{module_name}' has no class "
             f"'{class_name}'."
         )
-    if not hasattr(method_class, "fit") or not hasattr(method_class, "decision_function"):
+    missing = [
+        method_name
+        for method_name in ("fit", "decision_function", "predict")
+        if not hasattr(method_class, method_name)
+    ]
+    if missing:
         raise MethodUnavailableError(
-            f"Method '{name}' does not implement fit/decision_function."
+            f"Method '{name}' does not implement: {', '.join(missing)}. "
+            "See docs/INTERFACES.md."
         )
     return method_class
 
@@ -228,129 +224,6 @@ def time_to_tolerance(
     return float(time_values[crossing_index]), True, final_gap
 
 
-def _get_attr(model: Any, names: Sequence[str]) -> Any:
-    for name in names:
-        if hasattr(model, name):
-            value = getattr(model, name)
-            if value is not None:
-                return value
-    history = getattr(model, "history", None)
-    if isinstance(history, Mapping):
-        for name in names:
-            if name in history and history[name] is not None:
-                return history[name]
-    return None
-
-
-def _extract_history(model: Any) -> tuple[np.ndarray | None, np.ndarray | None]:
-    objective_history = _get_attr(
-        model,
-        (
-            "objective_history",
-            "objective_hist",
-            "objectives",
-            "primal_history",
-            "obj_history",
-        ),
-    )
-    time_history = _get_attr(
-        model,
-        (
-            "time_history",
-            "times",
-            "timestamps",
-            "iteration_times",
-            "elapsed_times",
-        ),
-    )
-
-    history = getattr(model, "history", None)
-    if (
-        objective_history is None
-        and isinstance(history, (list, tuple))
-        and history
-        and isinstance(history[0], Mapping)
-    ):
-        objective_history = [
-            entry.get("objective", entry.get("obj", entry.get("primal_objective")))
-            for entry in history
-        ]
-        if all(value is None for value in objective_history):
-            objective_history = None
-        if time_history is None:
-            time_history = [
-                entry.get("time", entry.get("elapsed_sec", entry.get("time_sec")))
-                for entry in history
-            ]
-            if all(value is None for value in time_history):
-                time_history = None
-
-    if objective_history is None:
-        return None, None
-
-    objectives = np.asarray(objective_history, dtype=np.float64).ravel()
-    if objectives.size == 0:
-        return None, None
-    if time_history is None:
-        return objectives, None
-    times = np.asarray(time_history, dtype=np.float64).ravel()
-    if times.size != objectives.size:
-        return objectives, None
-    return objectives, times
-
-
-def _extract_vector(model: Any, names: Sequence[str]) -> np.ndarray | None:
-    value = _get_attr(model, names)
-    if value is None:
-        return None
-    try:
-        array = np.asarray(value, dtype=np.float64).ravel()
-    except (TypeError, ValueError):
-        return None
-    if array.size == 0 or not np.all(np.isfinite(array)):
-        return None
-    return array
-
-
-def _extract_bias(model: Any) -> float | None:
-    value = _get_attr(model, ("b", "bias", "intercept_"))
-    if value is None:
-        return None
-    try:
-        array = np.asarray(value, dtype=np.float64).ravel()
-    except (TypeError, ValueError):
-        return None
-    if array.size != 1 or not np.isfinite(array[0]):
-        return None
-    return float(array[0])
-
-
-def compute_primal_objective(
-    model: Any,
-    X: np.ndarray,
-    y: np.ndarray,
-    C_per_sample: np.ndarray,
-) -> float | None:
-    """Recompute the canonical weighted objective from ``w`` and ``b``.
-
-    Convention: ``0.5 * ||w||^2 + sum_i C_i * max(0, 1 - y_i (x_i^T w + b))``.
-    Solvers should report their histories in this convention; the harness uses
-    this recomputation to check consistency.
-    """
-    weights = _extract_vector(model, ("w", "weights", "coef_"))
-    bias = _extract_bias(model)
-    if weights is None or bias is None:
-        return None
-    if weights.size != X.shape[1]:
-        return None
-    margins = y.astype(np.float64) * (X @ weights + bias)
-    hinge = np.maximum(0.0, 1.0 - margins)
-    objective = 0.5 * float(weights @ weights) + float(np.sum(C_per_sample * hinge))
-    if not math.isfinite(objective):
-        return None
-    return objective
-
-
 def _relative_gap(objective: float | None, reference: float | None) -> float | None:
     if objective is None or reference is None:
         return None
@@ -397,25 +270,6 @@ def _downsample_history(
     sampled_history = history[indices].tolist()
     sampled_times = None if times is None else times[indices].tolist()
     return sampled_history, sampled_times, True
-
-
-def _filtered_fit_kwargs(fit_callable: Any, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        signature = inspect.signature(fit_callable)
-    except (TypeError, ValueError):
-        return dict(kwargs)
-    if any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
-    ):
-        return dict(kwargs)
-    accepted = {
-        name
-        for name, parameter in signature.parameters.items()
-        if parameter.kind
-        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-    }
-    return {key: value for key, value in kwargs.items() if key in accepted}
 
 
 def _clean_ratio(ratio: float | int) -> float | int:
@@ -528,6 +382,7 @@ def _base_record(
         "objective_reported": None,
         "objective_recomputed": None,
         "objective_consistency_rel_error": None,
+        "history_final_consistency_rel_error": None,
         "history_consistent": None,
         "reference_objective": None,
         "relative_gap": None,
@@ -550,6 +405,9 @@ def _base_record(
         "history_truncated": False,
         "objective_history": None,
         "time_history": None,
+        "alphas_summary": None,
+        "rho_history": None,
+        "rho_final": None,
         "candidate_diagnostics": [],
         "candidate_failures": [],
         "data_meta": dict(data_meta or {}),
@@ -689,7 +547,7 @@ def run_one(
 
         try:
             model = method_class()
-            filtered_kwargs = _filtered_fit_kwargs(model.fit, fit_kwargs)
+            filtered_kwargs = filtered_fit_kwargs(model.fit, fit_kwargs)
             set_seed(seed)
             start = datetime.now(timezone.utc)
             timer = _WallTimer()
@@ -833,7 +691,7 @@ def run_one(
         cost_ratio=cost_ratio,
         c_fp=c_fp,
     )
-    objective_reported_value = _get_attr(
+    objective_reported_value = get_attr(
         model,
         ("objective", "final_objective", "primal_objective", "objective_value"),
     )
@@ -860,15 +718,25 @@ def run_one(
         objective_recomputed if objective_recomputed is not None else objective_reported
     )
 
-    objective_history, time_history = _extract_history(model)
-    n_iter = _get_attr(model, ("n_iter", "n_iter_", "iterations", "nit", "num_iter"))
+    objective_history, time_history = extract_history(model)
+    history_final_error: float | None = None
+    if objective_history is not None and objective is not None:
+        finite_history = objective_history[np.isfinite(objective_history)]
+        if finite_history.size:
+            history_final = float(finite_history[-1])
+            history_final_error = abs(history_final - objective) / max(
+                abs(objective), 1e-12
+            )
+            if history_final_error > 1e-3:
+                history_consistent = False
+    n_iter = get_attr(model, ("n_iter", "n_iter_", "iterations", "nit", "num_iter"))
     if n_iter is None and objective_history is not None:
         n_iter = int(objective_history.size)
     try:
         n_iter = int(n_iter) if n_iter is not None else None
     except (TypeError, ValueError):
         n_iter = None
-    converged_value = _get_attr(model, ("converged", "is_converged", "success"))
+    converged_value = get_attr(model, ("converged", "is_converged", "success"))
     converged = bool(converged_value) if converged_value is not None else None
 
     sampled_history, sampled_times, truncated = _downsample_history(
@@ -876,6 +744,25 @@ def run_one(
         time_history,
         history_max_points,
     )
+
+    alphas = extract_vector(model, ("alphas", "alpha"))
+    alphas_summary: dict[str, Any] | None = None
+    if alphas is not None:
+        alphas_summary = {
+            "count": int(alphas.size),
+            "nonzero": int(np.sum(np.abs(alphas) > 1e-12)),
+            "sum": float(np.sum(alphas)),
+            "min": float(np.min(alphas)),
+            "max": float(np.max(alphas)),
+        }
+    rho_raw = get_attr(model, ("rho_history", "rho_hist"))
+    rho_history: list[float] | None = None
+    rho_final: float | None = None
+    if rho_raw is not None:
+        rho_values = np.asarray(rho_raw, dtype=np.float64).ravel()
+        if rho_values.size and np.all(np.isfinite(rho_values)):
+            rho_history, _, _ = _downsample_history(rho_values, None, 1000)
+            rho_final = float(rho_values[-1])
 
     record.update(
         {
@@ -885,6 +772,7 @@ def run_one(
             "objective_reported": objective_reported,
             "objective_recomputed": objective_recomputed,
             "objective_consistency_rel_error": consistency_error,
+            "history_final_consistency_rel_error": history_final_error,
             "history_consistent": history_consistent,
             "pr_auc": float(test_metrics["pr_auc"]),
             "recall_at_fpr_0.001": float(test_metrics["recall_at_fpr_0.001"]),
@@ -898,6 +786,9 @@ def run_one(
             "history_truncated": bool(truncated),
             "objective_history": sampled_history,
             "time_history": sampled_times,
+            "alphas_summary": alphas_summary,
+            "rho_history": rho_history,
+            "rho_final": rho_final,
             "status": "ok",
             "error": None,
         }
@@ -1631,7 +1522,7 @@ def run_experiment(
 def _record_for_csv(record: Mapping[str, Any]) -> dict[str, Any]:
     row: dict[str, Any] = {}
     for key, value in record.items():
-        if key in ("objective_history", "time_history", "pr_curve"):
+        if key in ("objective_history", "time_history", "pr_curve", "rho_history"):
             continue
         if isinstance(value, (dict, list, tuple)):
             row[key] = json.dumps(value, default=str)

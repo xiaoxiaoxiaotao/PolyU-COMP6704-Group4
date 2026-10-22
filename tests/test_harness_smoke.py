@@ -86,6 +86,8 @@ class ToyHistorySVM:
         self.time_history = [0.0, 0.1, 0.2]
         self.n_iter = 3
         self.converged = True
+        self.alphas = np.abs(np.asarray(C_per_sample, dtype=np.float64)).copy()
+        self.rho_history = [1.0, 0.5]
         return self
 
     def decision_function(self, X: np.ndarray) -> np.ndarray:
@@ -227,6 +229,9 @@ def test_run_experiment_assigns_reference_and_time_to_tolerance(tmp_path) -> Non
     assert record["reached_tolerance"] is True
     assert record["time_to_tolerance_sec"] == pytest.approx(0.2)
     assert record["history_consistent"] is True
+    assert record["alphas_summary"]["count"] == record["n_train"]
+    assert record["rho_final"] == pytest.approx(0.5)
+    assert record["rho_history"] == pytest.approx([1.0, 0.5])
 
     path = run_file_path(
         tmp_path,
