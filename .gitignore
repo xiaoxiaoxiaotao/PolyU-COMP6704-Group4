@@ -23,6 +23,9 @@ results/logs/*
 # results/tables/
 # results/figures/
 
+# Temporary sklearn stand-in runs (not final results)
+results/preliminary/
+
 # OS / editor
 .DS_Store
 Thumbs.db

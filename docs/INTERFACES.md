@@ -54,10 +54,15 @@ The harness passes NumPy arrays, not DataFrames:
 
 | Object | Shape / dtype | Meaning |
 |---|---|---|
-| `X` | `(n_train, 30)` `float64` | `V1`…`V28` then `Amount`; `Time` excluded |
+| `X` | `(n_train, 29)` `float64` | `V1`…`V28` then `Amount`; `Time` excluded |
 | `y` | `(n_train,)` `int8` | `-1` = legitimate, `+1` = fraud |
 | `C_per_sample` | `(n_train,)` `float64` | per-sample penalty, strictly positive |
-| `X_val`, `X_test` | `(n, 30)` `float64` | never used for fitting or threshold tuning |
+| `X_val`, `X_test` | `(n, 29)` `float64` | never used for fitting or threshold tuning |
+
+> Dimension note: `V1`–`V28` (28 columns) + `Amount` = **29 model features**. The
+> proposal's “d = 30” includes the timestamp column in the raw schema; `Time` is
+> deliberately excluded from the model by the project data policy. The harness
+> derives `d` from `X` and logs it in every run.
 
 Data facts (already verified and committed):
 

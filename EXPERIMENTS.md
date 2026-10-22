@@ -259,7 +259,8 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 - SMO: `n <= 10k`; if the kernel cache exceeds the memory budget, reduce to 5k and record the
   cap. Full 284k is intentionally not attempted; the **O(n²) memory wall is a finding**.
 - CVXPY: `n <= 20k` (stratified subset).
-- ADMM/PA-ADMM: full data is feasible because `d = 30` and the linear system is 31×31.
+- ADMM/PA-ADMM: full data is feasible because `d = 29` (V1–V28 + Amount; Time is not a
+  feature) and the linear system is 30×30.
 - Pegasos: full data; O(d) per iteration.
 - Per-fit time budget: 300 s for fast/correctness runs, 900 s for full runs. Log timeouts and
   OOM as failures; do not drop them silently.
@@ -428,7 +429,7 @@ The whole project is done when:
   and frame conclusions as sensitivity, not a deployment recommendation.
 - **SMO memory:** O(n²) kernel memory; cap at 5k–10k and report the cap. The memory wall is a
   finding, not a bug.
-- **ADMM's dense solve:** `d = 30` makes the 31×31 system cheap; do not extrapolate to
+- **ADMM's dense solve:** `d = 29` makes the 30×30 system cheap; do not extrapolate to
   high-dimensional data without a sparse-aware variant.
 - **PA-ADMM may not win:** report the component ablation and the negative result. The
   cost-aware benchmark and regime map remain the contribution.
