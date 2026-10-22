@@ -1,0 +1,23 @@
+# Synthetic scaling test (same fraud problem, controlled n).
+experiment: scaling
+dataset: synthetic
+methods: [pegasos, admm, pa_admm]
+seeds: [0, 1, 2]
+cost_ratios: [10]
+C_grid: [1.0]
+tolerance: 0.001
+time_budget_sec: 900
+reference_method: null
+data:
+  source: synthetic
+  split_protocol: stratified
+  use_saved_splits: false
+  standardize_amount: false
+  synthetic_n_list: [10000, 25000, 50000, 100000, 200000]
+  synthetic_d: 20
+  synthetic_fraud_rate: 0.01
+  synthetic_separation: 3.0
+method_caps: {}
+notes: >-
+  Fixed C=1 and ratio 10:1; synthetic features are standard normal, so no
+  Amount standardization. Runtime/memory versus n is the object of study.

@@ -1,0 +1,18 @@
+# Final comparison on the full cleaned ULB dataset.
+experiment: main_full
+methods: [smo, pegasos, admm, pa_admm, cvxpy]
+seeds: [0, 1, 2, 3, 4]
+cost_ratios: [10, 20, 50]
+tolerance: 0.001
+time_budget_sec: 900
+reference_method: null
+data:
+  subset_n: null
+  split_protocol: stratified
+  use_saved_splits: true
+method_caps:
+  smo: 10000
+  cvxpy: 20000
+notes: >-
+  SMO is capped at 10k and CVXPY at 20k (stratified caps); Pegasos/ADMM/PA-ADMM
+  run on all training rows. Saved split files are the source of truth.

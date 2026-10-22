@@ -1,0 +1,65 @@
+# Shared defaults. Experiment YAMLs are deep-merged onto this file.
+experiment: base
+dataset: ulb
+
+methods: [pegasos, admm, pa_admm]
+seeds: [0]
+cost_ratios: [10]
+C_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
+tolerance: 0.0001
+time_budget_sec: 300
+
+method_caps:
+  smo: 10000
+  cvxpy: 20000
+
+method_kwargs:
+  smo: {}
+  pegasos: {}
+  admm:
+    rho0: 1.0
+    adaptive_rho: false
+    alpha: 1.0
+  pa_admm:
+    K: 10
+    rho0: 1.0
+    adaptive_rho: true
+    alpha: 1.6
+  cvxpy: {}
+
+# If set, reference_objective is taken from this method (e.g. cvxpy in
+# correctness runs). Otherwise the best observed objective on the same
+# dataset/seed/ratio/n_train is used.
+reference_method: null
+
+data:
+  source: ulb
+  raw_path: data/raw/creditcard.csv
+  splits_dir: data/splits
+  split_protocol: stratified
+  subset_n: null
+  subset_seed: per_seed
+  drop_duplicates: true
+  standardize_amount: true
+  use_saved_splits: true
+  synthetic_n_list: []
+  synthetic_d: 20
+  synthetic_fraud_rate: 0.01
+  synthetic_separation: 3.0
+
+data_variants: []
+method_variants: []
+
+paths:
+  results_dir: results
+  log_dir: results/logs
+  tables_dir: results/tables
+  figures_dir: results/figures
+
+logging:
+  level: INFO
+
+aggregate: true
+history_max_points: 10000
+overwrite: true
+notes: null

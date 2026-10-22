@@ -1,0 +1,19 @@
+# Fast iteration matrix on a 50k stratified subset.
+experiment: main_fast
+methods: [smo, pegasos, admm, pa_admm, cvxpy]
+seeds: [0, 1, 2]
+cost_ratios: [10, 20, 50]
+tolerance: 0.001
+time_budget_sec: 300
+reference_method: null
+data:
+  subset_n: 50000
+  subset_seed: 0   # same 50k subset for all seeds; seed controls the 70/15/15 split
+  split_protocol: stratified
+  use_saved_splits: false
+method_caps:
+  smo: 10000
+  cvxpy: 10000
+notes: >-
+  SMO and CVXPY are capped at 10k; Pegasos/ADMM/PA-ADMM use the full 50k
+  subset. Thresholds and C are selected on validation only.

@@ -1,0 +1,56 @@
+# Imbalance, label-noise, and temporal stress tests.
+experiment: stress
+methods: [smo, pegasos, admm, pa_admm]
+seeds: [0, 1, 2]
+cost_ratios: [20]
+tolerance: 0.001
+time_budget_sec: 900
+reference_method: null
+data:
+  subset_n: null
+  split_protocol: stratified
+  use_saved_splits: true
+method_caps:
+  smo: 10000
+  cvxpy: 20000
+data_variants:
+  # The natural training prevalence is 0.167%, so positive-only subsampling can
+  # only reach 0.1%. class_rate uses positive subsampling below that rate and
+  # training-negative subsampling above it; the mechanism is recorded per run.
+  - name: fraud-rate-0.001
+    type: class_rate
+    fraud_rate: 0.001
+    methods: [pegasos, admm, pa_admm]
+  - name: fraud-rate-0.005
+    type: class_rate
+    fraud_rate: 0.005
+    methods: [pegasos, admm, pa_admm]
+  - name: fraud-rate-0.01
+    type: class_rate
+    fraud_rate: 0.01
+    methods: [pegasos, admm, pa_admm]
+  - name: fraud-rate-0.05
+    type: class_rate
+    fraud_rate: 0.05
+    methods: [pegasos, admm, pa_admm]
+  - name: fraud-rate-0.10
+    type: class_rate
+    fraud_rate: 0.10
+    methods: [pegasos, admm, pa_admm]
+  - name: label-noise-0.05
+    type: label_noise
+    rate: 0.05
+    methods: [smo, pegasos, admm, pa_admm]
+  - name: label-noise-0.10
+    type: label_noise
+    rate: 0.10
+    methods: [smo, pegasos, admm, pa_admm]
+  - name: chronological
+    split_protocol: chronological
+    methods: [pegasos, admm, pa_admm]
+notes: >-
+  Fraud-rate variants change training prevalence only: positive subsampling for
+  targets below the natural 0.167%, negative subsampling for higher targets
+  (positive-only downsampling cannot increase prevalence). Label-noise variants
+  flip training labels only. Validation/test stay fixed and clean. Chronological
+  test is the latest 15% of transactions.

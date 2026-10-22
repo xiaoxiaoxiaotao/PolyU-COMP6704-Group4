@@ -1,0 +1,22 @@
+# Objective/KKT agreement on a 10k stratified subset.
+# LIBSVM is an external reference owned by WP2; CVXPY is the in-harness
+# reference for ADMM/PA-ADMM until the SMO-LIBSVM comparison is supplied.
+experiment: correctness
+methods: [smo, admm, pa_admm, cvxpy]
+seeds: [0]
+cost_ratios: [10]
+C_grid: [1.0]
+tolerance: 0.0001
+time_budget_sec: 300
+reference_method: cvxpy
+data:
+  subset_n: 10000
+  subset_seed: 0
+  split_protocol: stratified
+  use_saved_splits: false
+method_caps:
+  smo: 10000
+  cvxpy: 10000
+notes: >-
+  Fixed C=1 and ratio 10:1. LIBSVM comparison is pending WP2; no external
+  LIBSVM result is fabricated here.

@@ -39,6 +39,11 @@ data/
 .gitignore
 ```
 
+The WP4 branch (`feat/eval`) adds `src/` (data/metrics/evaluation/utils only),
+`configs/`, `experiments/`, `tests/`, `data/splits/`, `docs/report/`, `docs/slides/`,
+and placeholder tables/figures under `results/`. Solver modules and `src/costs.py`
+remain owned by WP1–WP3 and are not present yet.
+
 ### Directories to create when implementation starts
 
 | Path | Contents | Committed? |
@@ -75,6 +80,8 @@ Rules:
 | Target | `Class` (1 = fraud, 0 = legitimate) |
 | Positives | **492** (0.172%) |
 | Duplicates | 1,081 exact duplicate rows; drop before splitting |
+| Rows after dedup | **283,726** (473 frauds, 0.167%) |
+| SHA-256 | `76274b691b16a6c49d3f159c883398e03ccd6d1ee12d9d8ee38f4b4b98551a89` |
 | Source | Kaggle `mlg-ulb/creditcardfraud`; downloaded via the public Hugging Face mirror `David-Egea/Creditcard-fraud-detection` |
 
 The file is already downloaded and verified. It is **not** in Git. If another member needs it,
@@ -97,11 +104,28 @@ fraud count before use.
 | Chronological | Sort by `Time`; 70% train / 15% validation / 15% test | 0 | Temporal robustness check |
 
 - Save **integer row indices** as JSON in `data/splits/`; do not copy the data.
+- Index convention: positional indices into the **deduplicated, reset-index** frame in
+  `src/data.py::clean_data` (283,726 rows). The raw CSV is never indexed directly.
 - All methods use the same split files.
-- For imbalance stress tests, subsample **training positives only**; validation/test stay fixed.
+- For imbalance stress tests, change **training prevalence only**; validation/test stay fixed.
+  Positive-only subsampling can only lower prevalence below the natural cleaned rate (0.167%),
+  so targets of 0.5%/1%/5%/10% cannot be reached that way. The harness therefore subsamples
+  training positives for lower targets and training negatives for higher targets, and records
+  the mechanism (`positive_subsample` / `negative_subsample`) in every run JSON.
 - For label-noise stress tests, flip labels in the **training set only**; test labels stay clean.
 - For the chronological check, the test set is the latest 15% of transactions; report the
   distribution shift explicitly.
+
+Generated files (`experiments/generate_splits.py`, committed, ~11 MB total):
+
+| File | Train / val / test rows | Fraud counts | Fraud rates |
+|---|---|---|---|
+| `stratified_seed0..4.json` | 198,608 / 42,559 / 42,559 | 331 / 71 / 71 | 0.167% / 0.167% / 0.167% |
+| `chronological_seed0.json` | 198,608 / 42,558 / 42,560 | 366 / 55 / 52 | 0.184% / 0.129% / 0.122% |
+
+The chronological test block is the latest 15% by `Time` (`Time` range 151,320–172,792).
+Its fraud rate is about one-third lower than the training block, so the temporal check also
+measures distribution drift; do not read it as a clean estimate of the same population.
 
 ### 3.4 When re-downloading
 
@@ -217,7 +241,7 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 | `main_full` | full 284,807; SMO on 10k; CVXPY on 20k | SMO, Pegasos, ADMM, PA-ADMM, CVXPY | 10, 20, 50 | 5 | Final numbers for the report |
 | `cost_sweep` | 50k subset | Pegasos, ADMM, PA-ADMM | 1, 3, 5, 10, 20, 50 | 1 | How the ranking changes with cost asymmetry |
 | `ablation` | full data | PA-ADMM variants | 20:1 | 3 | `K ∈ {0,5,10,20}`; adaptive ρ on/off; `alpha ∈ {1.0,1.5,1.8}`; `rho0 ∈ {0.1,1,10}` |
-| `stress_imbalance` | training positives subsampled to 0.1/0.5/1/5/10% | Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Extreme-imbalance behaviour |
+| `stress_imbalance` | training prevalence adjusted to 0.1/0.5/1/5/10% (positive or negative subsampling, recorded) | Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Extreme-imbalance behaviour |
 | `stress_noise` | 5%/10% training labels flipped | SMO (10k), Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Objective–generalization gap |
 | `temporal` | chronological 70/15/15 | Pegasos, ADMM, PA-ADMM | 20:1 | 1–3 | Distribution drift |
 | `scaling` | synthetic `n = 10k, 25k, 50k, 100k, 200k`; `d = 20` | Pegasos, ADMM, PA-ADMM | 10:1 | 3 | Runtime/memory vs `n` |
@@ -413,9 +437,10 @@ The whole project is done when:
 - [x] Create repository and directory contract.
 - [x] Download and verify ULB data: `data/raw/creditcard.csv`, 284,807 × 31, 492 frauds.
 - [x] Add the proposal PDF under `docs/proposal/`.
-- [ ] Implement data/cost/metric utilities and split files.
-- [ ] Implement SMO, Pegasos, ADMM/PA-ADMM, CVXPY baseline.
-- [ ] Implement the unified evaluation runner and experiment entry points.
-- [ ] Run `correctness` and `main_fast`.
+- [x] Implement WP4 data/metric utilities, reproducible split files, evaluation harness,
+      configs, and experiment entry points.
+- [ ] Implement `src/costs.py` (WP1) and the five solver modules (WP1–WP3).
+- [ ] Run `correctness` and `main_fast` (blocked on solver modules).
 - [ ] Freeze configs and run `main_full`.
-- [ ] Produce tables/figures for the report and slides.
+- [ ] Produce final tables/figures; empty tables and "pending solver integration"
+      placeholder figures are already committed, and no final numbers are fabricated.
