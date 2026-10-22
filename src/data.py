@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -21,6 +22,15 @@ HF_MIRROR_URL = (
     "https://huggingface.co/datasets/David-Egea/Creditcard-fraud-detection/"
     "resolve/main/creditcard.csv"
 )
+
+
+def sha256_file(path: str | Path) -> str:
+    """Return the SHA-256 hex digest of a file."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_raw(path: str | Path = "data/raw/creditcard.csv") -> pd.DataFrame:
@@ -165,8 +175,10 @@ def save_splits(
     return target
 
 
-def load_splits(path: str | Path) -> dict[str, np.ndarray]:
-    """Load split indices saved by :func:`save_splits`."""
+def load_splits_with_metadata(
+    path: str | Path,
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """Load split indices and the accompanying metadata."""
     with Path(path).open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict):
@@ -176,7 +188,45 @@ def load_splits(path: str | Path) -> dict[str, np.ndarray]:
         if name not in payload:
             raise ValueError(f"Split file {path} is missing '{name}'")
         splits[name] = np.asarray(payload[name], dtype=np.int64)
+    metadata = {
+        key: value
+        for key, value in payload.items()
+        if key not in ("train", "val", "test")
+    }
+    return splits, metadata
+
+
+def load_splits(path: str | Path) -> dict[str, np.ndarray]:
+    """Load split indices saved by :func:`save_splits`."""
+    splits, _metadata = load_splits_with_metadata(path)
     return splits
+
+
+def validate_split_metadata(
+    metadata: Mapping[str, Any],
+    n_rows: int,
+    n_positives: int,
+    source_sha256: str | None = None,
+) -> None:
+    """Fail loudly if a saved split does not belong to the current data."""
+    expected_rows = metadata.get("clean_rows")
+    if expected_rows is not None and int(expected_rows) != int(n_rows):
+        raise ValueError(
+            f"Split metadata clean_rows={expected_rows} does not match current "
+            f"cleaned frame with {n_rows} rows"
+        )
+    expected_positives = metadata.get("clean_positives")
+    if expected_positives is not None and int(expected_positives) != int(n_positives):
+        raise ValueError(
+            f"Split metadata clean_positives={expected_positives} does not match "
+            f"current cleaned frame with {n_positives} positives"
+        )
+    expected_sha = metadata.get("source_sha256")
+    if source_sha256 is not None and expected_sha is not None:
+        if str(expected_sha) != str(source_sha256):
+            raise ValueError(
+                "Split metadata source_sha256 does not match the current raw CSV"
+            )
 
 
 def _standardize_amount(

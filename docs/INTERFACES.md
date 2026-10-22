@@ -34,10 +34,17 @@ Then, from the repository root:
 .venv/bin/python experiments/run_correctness.py --config configs/correctness.yaml --dry-run
 .venv/bin/python experiments/run_correctness.py --config configs/correctness.yaml
 
-# 3) fast matrix
+# 3) main matrices
 .venv/bin/python experiments/run_main.py --config configs/main_fast.yaml --dry-run
 .venv/bin/python experiments/run_main.py --config configs/main_fast.yaml
+.venv/bin/python experiments/run_main.py --config configs/main_capped.yaml
+.venv/bin/python experiments/run_main.py --config configs/main_full.yaml
 ```
+
+`main_full` gives all five methods the full training set; if SMO/CVXPY
+time out or OOM, the failure is recorded and the all-five fair fallback is
+`main_capped` on the common 10k subset. No method gets a different training
+subset inside one comparison.
 
 `check_solver.py` exits `0` only when the contract passes. Its JSON report is
 written to `results/raw/solver_checks/{method}.json` (ignored by Git).
@@ -108,8 +115,9 @@ C_i = C · w_{y_i},   w_+/w_- = c_FN/c_FP,
 ```
 
 normalized so that the **sample mean of `w` is one**. The cost ratio is
-preserved exactly. Values differ between capped/full training subsets because
-each partition is normalized on its own rows.
+preserved exactly. Values differ between data variants because each training
+partition is normalized on its own rows. All methods in one experiment receive
+the same `X_train`, `y_train`, and `C_per_sample`; there are no per-method caps.
 
 - Use `C_per_sample` directly as the per-sample box bound/penalty.
 - Do **not** apply class weights again inside `fit`.
@@ -118,6 +126,9 @@ each partition is normalized on its own rows.
   (`w+ = 2c_FN/(c_FN+c_FP)`, `w- = 2c_FP/(c_FN+c_FP)`) differs from the
   sample-mean normalization by a global scalar only; that scalar is absorbed
   into the validation-selected `C`. Do not compensate for it inside the solver.
+- Until WP1's `src/costs.py` lands, the harness uses this placeholder and records
+  `costs_source = "harness_placeholder_sample_mean"` in every run. Reconcile the
+  canonical cost object before the final campaign.
 
 SMO dual box: `0 <= alpha_i <= C_per_sample[i]`.
 ADMM z-update: use `C_per_sample[i] / rho`.
@@ -144,8 +155,9 @@ Optional but useful: `residual_history`, `kkt_violation_history`, iterate
 averages, support-vector indices. The harness ignores unknown attributes.
 A non-iterative solver (for example CVXPY) can report a single-point
 `objective_history=[objective]` and `time_history=[fit_time_sec]`; it will still
-have a well-defined final objective, but its time-to-tolerance is not
-comparable to iterative methods.
+have a well-defined final objective, but `time_to_tolerance` is set to `null`
+(not a full-fit-time proxy) because a single point has no crossing resolution.
+Report at least two aligned points to get a non-null time-to-tolerance.
 
 The objective convention is **unnormalized sum**:
 
@@ -172,9 +184,10 @@ objective in the same `(dataset, ratio, seed, n_train)` group otherwise.
 Therefore:
 
 - **`objective_history` is required** for the primary metric.
-- **`time_history` is effectively required** for a non-null wall-clock time.
-  If it is missing, the harness reports the final gap but no timing. Do not
-  fabricate evenly spaced timestamps.
+- **`time_history` is effectively required** for a non-null wall-clock time,
+  and `objective_history` must contain at least **two** points. If either is
+  missing, the harness reports the final gap but `time_to_tolerance = null`.
+  Do not fabricate evenly spaced timestamps.
 - Append at every iteration or at a logging checkpoint; align both arrays.
 - The harness downsamples histories to `history_max_points` for JSON size.
 
@@ -263,16 +276,36 @@ WP2's responsibility; record LIBSVM's objective and accuracy separately and
 compare them with the SMO run. The harness deliberately does not add a sixth
 method or fabricate a LIBSVM result.
 
+### Reproducibility and audit fields
+
+- Every run JSON stores `config_hash`, `training_cost_ratio`,
+  `evaluation_cost_ratio`, `costs_source`, `hard_timeout_sec`, and the split
+  metadata. The default config does **not** overwrite an existing run.
+- `cost_sweep` decouples training weights from deployment cost: training ratio
+  varies, but validation thresholds and test cost use the same fixed
+  `evaluation_cost_ratio: 20`. This makes cost levels comparable across rows.
+- Saved split files are validated against `clean_rows`, `clean_positives`, and
+  the raw CSV SHA-256 before fitting.
+- `aggregate_runs` writes per-metric tables, bootstrap CIs, and a
+  `{experiment}_wilcoxon.csv` pairwise test table when multiple seeds exist.
+- `peak_memory_mb` is a per-fit sampled process-RSS **delta**, not the process
+  lifetime maximum.
+
 Rules:
 
 - Never tune on test.
 - Never use validation/test data inside `fit`.
-- Honor `time_budget_sec`; a fit that exceeds it is recorded as a timeout and
-  is not selected.
-- Same split, `C_i`, tolerance, budget, and single-threaded BLAS across methods.
-- SMO ≤ 10k, CVXPY ≤ 20k; caps are enforced by the harness and recorded.
-- The harness measures `fit_time_sec` and process peak memory; a solver's own
-  timing fields are optional diagnostics.
+- Honor `time_budget_sec`. The harness also applies a **90-minute hard timeout**
+  (`hard_timeout_sec`) per fit; timeout/OOM is recorded as a failure, not
+  silently dropped.
+- Same split, training rows, `C_i`, tolerance, budget, and single-threaded BLAS
+  across every method in an experiment. There are no per-method training caps;
+  a method that cannot finish at the requested size fails explicitly.
+- The harness measures `fit_time_sec` and a **per-fit sampled process-RSS
+  delta** (`peak_memory_mb`); a solver's own timing fields are optional
+  diagnostics.
+- `fit_time_sec` excludes C-grid tuning; `tuning_fit_time_sec` is recorded
+  separately and should be reported with the comparison.
 
 ---
 
@@ -283,7 +316,8 @@ Rules:
 - constructor/`fit`/`decision_function`/`predict` exist and run;
 - `w` and `b` are finite and correctly shaped;
 - scores are finite 1-D, predictions are in `{-1,+1}`;
-- `objective_history` exists;
+- `objective_history` exists and has at least two points for a non-null
+  time-to-tolerance;
 - `time_history` is aligned if present;
 - the reported objective matches the canonical recomputation within `1e-3`;
 - `n_iter`/`converged`/`alphas`/`rho_history` are reported when available.
@@ -319,7 +353,7 @@ from src.solver_api import BaseBinarySVM, validate_training_data
 
 class SMO(BaseBinarySVM):
     def fit(self, X, y, C_per_sample, *, seed=0, tol=1e-4,
-            time_budget_sec=300.0, max_iter=100000, **kwargs):
+            time_budget_sec=5400.0, max_iter=100000, **kwargs):
         X, y, C = validate_training_data(X, y, C_per_sample)
         start = time.perf_counter()
         # ... SMO/dual coordinate descent with 0 <= alpha_i <= C[i] ...
@@ -342,7 +376,7 @@ class SMO(BaseBinarySVM):
 ```python
 class ADMMSVM(BaseBinarySVM):
     def fit(self, X, y, C_per_sample, *, seed=0, tol=1e-4,
-            time_budget_sec=300.0, rho0=1.0, adaptive_rho=True,
+            time_budget_sec=5400.0, rho0=1.0, adaptive_rho=True,
             alpha=1.6, max_iter=10000, **kwargs):
         X, y, C = validate_training_data(X, y, C_per_sample)
         # ... optional Pegasos warm start for PA-ADMM ...
@@ -374,7 +408,8 @@ PA-ADMM inherits or shares the ADMM loop and additionally sets
 - Applying class weights inside the solver (double weighting).
 - Reporting the objective divided by `n` while the history uses the sum (or
   vice versa).
-- Omitting `time_history` (no primary metric).
+- Omitting `time_history` or providing only one objective point (no primary
+  metric; the harness will report `null`).
 - Having a `time_history` whose length does not match `objective_history`.
 - Returning scores with shape `(n, 1)` or containing NaN/Inf.
 - Omitting `predict` (inheriting `BaseBinarySVM` provides a default).

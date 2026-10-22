@@ -4,11 +4,16 @@ methods: [pegasos, admm, pa_admm]
 seeds: [0]
 cost_ratios: [1, 3, 5, 10, 20, 50]
 tolerance: 0.001
-time_budget_sec: 300
+time_budget_sec: 5400
 reference_method: null
+# All rows are trained at their own ratio but thresholds and test cost use the
+# same 20:1 evaluation cost, so cost levels are comparable across training ratios.
+evaluation_cost_ratio: 20
 data:
   subset_n: 50000
   subset_seed: 0
   split_protocol: stratified
   use_saved_splits: false
-notes: Cost ratios are illustrative assumptions, not a bank loss model.
+notes: >-
+  Training weights vary by cost_ratio; evaluation threshold/cost is fixed at
+  20:1. Cost ratios are illustrative assumptions, not a bank loss model.

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import numpy as np
+import pandas as pd
 import pytest
 from sklearn.linear_model import SGDClassifier
 
@@ -11,13 +13,16 @@ from src import data as data_module
 from src.evaluate import (
     REQUIRED_RUN_FIELDS,
     MethodUnavailableError,
+    _assign_reference_objectives,
     aggregate_runs,
     load_method,
+    pairwise_wilcoxon_tests,
     run_experiment,
     run_file_path,
     run_one,
     time_to_tolerance,
 )
+from src.metrics import evaluate_scores, select_threshold_min_cost
 from src.utils import get_logger
 
 
@@ -63,6 +68,8 @@ class SklearnSGDHingeSmoke:
 class ToyHistorySVM:
     """Toy deterministic solver exposing a consistent objective history."""
 
+    scale = 1.0
+
     def fit(
         self,
         X: np.ndarray,
@@ -71,7 +78,7 @@ class ToyHistorySVM:
         **kwargs: object,
     ) -> "ToyHistorySVM":
         self.w = np.zeros(X.shape[1], dtype=np.float64)
-        self.w[0] = 1.0
+        self.w[0] = self.scale
         self.b = 0.0
         margins = y.astype(np.float64) * (X @ self.w + self.b)
         hinge = np.maximum(0.0, 1.0 - margins)
@@ -97,6 +104,10 @@ class ToyHistorySVM:
         return np.where(self.decision_function(X) >= 0.0, 1, -1)
 
 
+class ToyHistorySVMAlt(ToyHistorySVM):
+    scale = 2.0
+
+
 class FailingSVM:
     def fit(self, *args: object, **kwargs: object) -> None:
         raise RuntimeError("intentional fit failure")
@@ -106,6 +117,12 @@ class FailingSVM:
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return np.ones(X.shape[0])
+
+
+class SleepySVM(ToyHistorySVM):
+    def fit(self, *args: object, **kwargs: object) -> "SleepySVM":
+        time.sleep(2.0)
+        return self
 
 
 def _synthetic_arrays(n: int = 600, d: int = 6, fraud_rate: float = 0.08):
@@ -189,7 +206,7 @@ def test_run_experiment_assigns_reference_and_time_to_tolerance(tmp_path) -> Non
     config = {
         "experiment": "toy_test",
         "dataset": "synthetic",
-        "methods": ["toy"],
+        "methods": ["toy", "toy_alt"],
         "seeds": [0],
         "cost_ratios": [10],
         "C_grid": [1.0],
@@ -217,14 +234,17 @@ def test_run_experiment_assigns_reference_and_time_to_tolerance(tmp_path) -> Non
     logger = get_logger("test_harness", level=logging.WARNING)
     results = run_experiment(
         config,
-        method_registry_extra={"toy": ToyHistorySVM},
+        method_registry_extra={"toy": ToyHistorySVM, "toy_alt": ToyHistorySVMAlt},
         logger=logger,
     )
 
-    assert len(results) == 1
-    record = results[0]
+    assert len(results) == 2
+    record = min(results, key=lambda item: item["objective"])
     assert record["status"] == "ok"
-    assert record["reference_objective"] == pytest.approx(record["objective"])
+    assert record["config_hash"]
+    assert record["reference_objective"] == pytest.approx(
+        min(item["objective"] for item in results)
+    )
     assert record["relative_gap"] == pytest.approx(0.0)
     assert record["reached_tolerance"] is True
     assert record["time_to_tolerance_sec"] == pytest.approx(0.2)
@@ -232,6 +252,7 @@ def test_run_experiment_assigns_reference_and_time_to_tolerance(tmp_path) -> Non
     assert record["alphas_summary"]["count"] == record["n_train"]
     assert record["rho_final"] == pytest.approx(0.5)
     assert record["rho_history"] == pytest.approx([1.0, 0.5])
+    assert record["evaluation_cost_ratio"] == 10
 
     path = run_file_path(
         tmp_path,
@@ -280,6 +301,117 @@ def test_missing_method_is_reported_not_faked() -> None:
         load_method("not_a_registered_method")
     with pytest.raises(MethodUnavailableError):
         load_method("smo_does_not_exist")
+
+
+def test_evaluation_cost_ratio_is_used_for_threshold_and_cost(tmp_path) -> None:
+    arrays = _synthetic_arrays()
+    result = run_one(
+        experiment="eval_cost_test",
+        dataset="synthetic",
+        method="toy",
+        seed=0,
+        cost_ratio=10,
+        evaluation_cost_ratio=1,
+        X_train=arrays[0],
+        y_train=arrays[1],
+        X_val=arrays[2],
+        y_val=arrays[3],
+        X_test=arrays[4],
+        y_test=arrays[5],
+        C_grid=[1.0],
+        method_registry_extra={"toy": ToyHistorySVM},
+        results_dir=tmp_path,
+    )
+    assert result["status"] == "ok"
+    assert result["training_cost_ratio"] == 10
+    assert result["evaluation_cost_ratio"] == 1
+    val_scores = arrays[2] @ np.array([1.0] + [0.0] * (arrays[2].shape[1] - 1))
+    expected_threshold = select_threshold_min_cost(
+        arrays[3], val_scores, c_fn=1, c_fp=1
+    )
+    test_scores = arrays[4] @ np.array([1.0] + [0.0] * (arrays[4].shape[1] - 1))
+    expected = evaluate_scores(
+        arrays[5],
+        test_scores,
+        c_fn=1,
+        c_fp=1,
+        threshold=expected_threshold,
+    )
+    assert result["threshold"] == pytest.approx(expected_threshold)
+    assert result["cost_per_example"] == pytest.approx(expected["cost_per_example"])
+
+
+def test_hard_timeout_is_recorded_as_failure(tmp_path) -> None:
+    arrays = _synthetic_arrays(n=300)
+    result = run_one(
+        experiment="timeout_test",
+        dataset="synthetic",
+        method="sleepy",
+        seed=0,
+        cost_ratio=10,
+        X_train=arrays[0],
+        y_train=arrays[1],
+        X_val=arrays[2],
+        y_val=arrays[3],
+        X_test=arrays[4],
+        y_test=arrays[5],
+        C_grid=[1.0],
+        hard_timeout_sec=0.1,
+        method_registry_extra={"sleepy": SleepySVM},
+        results_dir=tmp_path,
+    )
+    assert result["status"] == "failed"
+    assert result["timed_out"] is True
+    assert "hard_timeout" in result["error"]
+
+
+def test_single_method_has_no_self_reference(tmp_path) -> None:
+    record = {
+        "experiment": "single_test",
+        "dataset": "synthetic",
+        "method": "toy",
+        "variant": None,
+        "seed": 0,
+        "cost_ratio": 20,
+        "evaluation_cost_ratio": 20,
+        "n_train": 100,
+        "tolerance": 1e-3,
+        "objective": 10.0,
+        "objective_history": [12.0, 10.0],
+        "time_history": [0.1, 0.2],
+        "history_points": 2,
+        "history_consistent": True,
+        "status": "ok",
+    }
+    _assign_reference_objectives(
+        [record],
+        {"reference_method": None},
+        tmp_path,
+        logger=None,
+    )
+    assert record["reference_objective"] is None
+    assert record["time_to_tolerance_sec"] is None
+    assert record["tolerance_note"] == "insufficient_comparable_runs"
+
+
+def test_pairwise_wilcoxon_table() -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset": ["d"] * 6,
+            "method": ["a"] * 3 + ["b"] * 3,
+            "variant": ["base"] * 6,
+            "seed": [0, 1, 2, 0, 1, 2],
+            "cost_ratio": [10] * 6,
+            "evaluation_cost_ratio": [10] * 6,
+            "n_train": [100] * 6,
+            "objective": [1.0, 2.0, 3.0, 2.0, 3.0, 4.0],
+        }
+    )
+    table = pairwise_wilcoxon_tests(frame, metrics=("objective",))
+    assert len(table) == 1
+    assert table.iloc[0]["method_a"] == "a"
+    assert table.iloc[0]["method_b"] == "b"
+    assert table.iloc[0]["n_pairs"] == 3
 
 
 def test_failed_fit_still_writes_a_failure_json(tmp_path) -> None:

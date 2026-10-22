@@ -6,7 +6,7 @@ seeds: [0, 1, 2]
 cost_ratios: [10]
 C_grid: [1.0]
 tolerance: 0.001
-time_budget_sec: 900
+time_budget_sec: 5400
 reference_method: null
 data:
   source: synthetic
@@ -17,7 +17,6 @@ data:
   synthetic_d: 20
   synthetic_fraud_rate: 0.01
   synthetic_separation: 3.0
-method_caps: {}
 notes: >-
   Fixed C=1 and ratio 10:1; synthetic features are standard normal, so no
   Amount standardization. Runtime/memory versus n is the object of study.

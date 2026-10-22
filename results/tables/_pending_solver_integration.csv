@@ -4,6 +4,9 @@ correctness,correctness_relative_gap.csv,pending solver integration,empty table;
 main_fast,main_fast_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
 main_fast,main_fast_cost_per_example.csv,pending solver integration,empty table; no fake numbers
 main_fast,main_fast_pr_auc.csv,pending solver integration,empty table; no fake numbers
+main_capped,main_capped_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
+main_capped,main_capped_cost_per_example.csv,pending solver integration,empty table; no fake numbers
+main_capped,main_capped_pr_auc.csv,pending solver integration,empty table; no fake numbers
 main_full,main_full_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
 main_full,main_full_fit_time_sec.csv,pending solver integration,empty table; no fake numbers
 main_full,main_full_cost_per_example.csv,pending solver integration,empty table; no fake numbers

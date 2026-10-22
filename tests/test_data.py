@@ -125,16 +125,48 @@ def test_prepare_arrays_can_skip_amount_standardization() -> None:
 def test_save_and_load_splits_roundtrip(tmp_path) -> None:
     frame = data_module.clean_data(make_frame())
     splits = data_module.make_stratified_splits(frame["Class"].to_numpy(), seed=1)
+    metadata = {
+        "protocol": "stratified",
+        "seed": 1,
+        "clean_rows": len(frame),
+        "clean_positives": int((frame["Class"] == 1).sum()),
+        "source_sha256": "abc123",
+    }
     path = tmp_path / "split.json"
-    data_module.save_splits(splits, path, metadata={"protocol": "stratified", "seed": 1})
+    data_module.save_splits(splits, path, metadata=metadata)
 
     payload = json.loads(path.read_text())
     assert payload["protocol"] == "stratified"
     assert payload["train_size"] == len(splits["train"])
 
-    loaded = data_module.load_splits(path)
+    loaded, loaded_metadata = data_module.load_splits_with_metadata(path)
+    assert loaded_metadata["source_sha256"] == "abc123"
     for name in ("train", "val", "test"):
         np.testing.assert_array_equal(loaded[name], splits[name])
+    np.testing.assert_array_equal(
+        data_module.load_splits(path)["test"],
+        splits["test"],
+    )
+
+    data_module.validate_split_metadata(
+        loaded_metadata,
+        n_rows=len(frame),
+        n_positives=int((frame["Class"] == 1).sum()),
+        source_sha256="abc123",
+    )
+    with pytest.raises(ValueError, match="clean_rows"):
+        data_module.validate_split_metadata(
+            loaded_metadata,
+            n_rows=len(frame) + 1,
+            n_positives=int((frame["Class"] == 1).sum()),
+        )
+    with pytest.raises(ValueError, match="source_sha256"):
+        data_module.validate_split_metadata(
+            loaded_metadata,
+            n_rows=len(frame),
+            n_positives=int((frame["Class"] == 1).sum()),
+            source_sha256="different",
+        )
 
 
 def test_stratified_subsample_preserves_class_rate() -> None:

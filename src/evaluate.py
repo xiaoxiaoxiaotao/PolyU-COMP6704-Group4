@@ -8,14 +8,18 @@ aggregation, so every method sees the same protocol.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import math
 import os
 import platform
-import sys
+import signal
+import threading
 import traceback
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -29,6 +33,7 @@ from .metrics import (
     evaluate_scores,
     precision_recall_points,
     select_threshold_min_cost,
+    wilcoxon_test,
 )
 from .solver_api import (
     BinarySVM,
@@ -79,6 +84,7 @@ REQUIRED_RUN_FIELDS = (
 METRICS_FOR_TABLES = (
     "time_to_tolerance_sec",
     "fit_time_sec",
+    "tuning_fit_time_sec",
     "n_iter",
     "objective",
     "relative_gap",
@@ -90,9 +96,113 @@ METRICS_FOR_TABLES = (
     "peak_memory_mb",
 )
 
+PAIRWISE_METRICS = (
+    "time_to_tolerance_sec",
+    "fit_time_sec",
+    "tuning_fit_time_sec",
+    "cost_per_example",
+    "pr_auc",
+    "recall_at_fpr_0.001",
+    "recall_at_fpr_0.01",
+    "balanced_accuracy",
+    "objective",
+)
+
 
 class MethodUnavailableError(RuntimeError):
     """Raised when a registered solver module/class is not available."""
+
+
+class _FitTimeoutError(TimeoutError):
+    """Internal exception raised by the per-fit hard timeout."""
+
+
+@contextmanager
+def _hard_timeout(seconds: float | None):
+    """Best-effort in-process alarm around one fit.
+
+    On Linux this interrupts Python-level solver loops. A C extension that does
+    not check signals can still overrun, so solvers must also honour
+    ``time_budget_sec``.
+    """
+    if (
+        seconds is None
+        or float(seconds) <= 0
+        or not hasattr(signal, "SIGALRM")
+        or threading.current_thread() is not threading.main_thread()
+    ):
+        yield
+        return
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _raise_timeout(signum: int, frame: Any) -> None:
+        raise _FitTimeoutError(f"fit exceeded hard timeout of {float(seconds):.1f}s")
+
+    try:
+        signal.signal(signal.SIGALRM, _raise_timeout)
+        signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    except (OSError, ValueError):
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+class _RSSMonitor:
+    """Sample process RSS during one fit and return the incremental peak."""
+
+    def __init__(self, interval_sec: float = 0.02) -> None:
+        self.interval_sec = float(interval_sec)
+        self.baseline_mb: float | None = None
+        self.peak_mb: float | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def _read_rss_mb() -> float | None:
+        try:
+            with Path("/proc/self/status").open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("VmRSS:"):
+                        return float(line.split()[1]) / 1024.0
+        except (OSError, ValueError, IndexError):
+            return None
+        return None
+
+    def start(self) -> "_RSSMonitor":
+        self.baseline_mb = self._read_rss_mb()
+        if self.baseline_mb is None:
+            return self
+        self.peak_mb = self.baseline_mb
+        self._thread = threading.Thread(target=self._sample, daemon=True)
+        self._thread.start()
+        return self
+
+    def _sample(self) -> None:
+        while not self._stop.wait(self.interval_sec):
+            current = self._read_rss_mb()
+            if current is not None:
+                self.peak_mb = max(self.peak_mb or current, current)
+
+    def stop(self) -> "_RSSMonitor":
+        current = self._read_rss_mb()
+        if current is not None:
+            self.peak_mb = max(self.peak_mb or current, current)
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        return self
+
+    @property
+    def delta_mb(self) -> float | None:
+        if self.baseline_mb is None or self.peak_mb is None:
+            return None
+        return max(0.0, float(self.peak_mb - self.baseline_mb))
 
 
 def load_method(
@@ -231,18 +341,6 @@ def _relative_gap(objective: float | None, reference: float | None) -> float | N
     return float((float(objective) - float(reference)) / denominator)
 
 
-def _process_peak_memory_mb() -> float | None:
-    try:
-        import resource
-
-        max_rss = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-        if sys.platform == "darwin":
-            return max_rss / (1024.0 * 1024.0)
-        return max_rss / 1024.0
-    except Exception:  # pragma: no cover - platform dependent
-        return None
-
-
 def _environment_info() -> dict[str, Any]:
     return {
         "platform": platform.platform(),
@@ -353,16 +451,23 @@ def _base_record(
     method_kwargs: Mapping[str, Any],
     tolerance: float,
     time_budget_sec: float,
+    hard_timeout_sec: float,
+    evaluation_cost_ratio: float | int,
+    config_hash: str | None,
     data_meta: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     ratio = _clean_ratio(cost_ratio)
+    eval_ratio = _clean_ratio(evaluation_cost_ratio)
     record: dict[str, Any] = {
         "experiment": experiment,
         "dataset": dataset,
         "method": method,
         "variant": variant,
         "cost_ratio": ratio,
+        "training_cost_ratio": ratio,
+        "evaluation_cost_ratio": eval_ratio,
         "seed": int(seed),
+        "config_hash": config_hash,
         "n_train": int(X_train.shape[0]),
         "n_val": int(X_val.shape[0]),
         "n_test": int(X_test.shape[0]),
@@ -370,10 +475,14 @@ def _base_record(
         "C": None,
         "C_grid": [float(value) for value in C_grid],
         "hyperparams": dict(method_kwargs),
+        "costs_source": "harness_placeholder_sample_mean",
         "c_fn": float(ratio),
         "c_fp": 1.0,
+        "eval_c_fn": float(eval_ratio),
+        "eval_c_fp": 1.0,
         "tolerance": float(tolerance),
         "time_budget_sec": float(time_budget_sec),
+        "hard_timeout_sec": float(hard_timeout_sec),
         "fit_time_sec": None,
         "tuning_fit_time_sec": None,
         "n_iter": None,
@@ -397,17 +506,24 @@ def _base_record(
         "threshold": None,
         "val_cost_per_example": None,
         "val_pr_auc": None,
-        "peak_memory_mb": _process_peak_memory_mb(),
+        "peak_memory_mb": None,
+        "process_rss_baseline_mb": None,
+        "process_rss_peak_mb": None,
+        "memory_measurement": "rss_sampling_delta",
         "n_train_positives": int(np.sum(y_train > 0)),
         "n_val_positives": int(np.sum(y_val > 0)),
         "n_test_positives": int(np.sum(y_test > 0)),
         "history_available": False,
+        "history_points": 0,
         "history_truncated": False,
+        "time_to_tolerance_upper_bound": False,
+        "selection_incomplete": False,
         "objective_history": None,
         "time_history": None,
         "alphas_summary": None,
         "rho_history": None,
         "rho_final": None,
+        "timed_out": False,
         "candidate_diagnostics": [],
         "candidate_failures": [],
         "data_meta": dict(data_meta or {}),
@@ -459,12 +575,15 @@ def run_one(
     y_test: np.ndarray,
     C_grid: Sequence[float] = (1.0,),
     tolerance: float = 1e-4,
-    time_budget_sec: float = 300.0,
+    time_budget_sec: float = 5400.0,
+    hard_timeout_sec: float | None = 5400.0,
+    evaluation_cost_ratio: float | int | None = None,
     method_kwargs: Mapping[str, Any] | None = None,
     method_registry_extra: Mapping[str, Any] | None = None,
     variant: str | None = None,
     results_dir: str | Path = "results",
     reference_objective: float | None = None,
+    config_hash: str | None = None,
     overwrite: bool = True,
     history_max_points: int = 10000,
     save: bool = True,
@@ -490,6 +609,11 @@ def run_one(
         raise ValueError("C_grid must contain positive values")
     if tolerance <= 0 or time_budget_sec <= 0:
         raise ValueError("tolerance and time_budget_sec must be positive")
+    if hard_timeout_sec is not None and hard_timeout_sec <= 0:
+        raise ValueError("hard_timeout_sec must be positive or None")
+    eval_ratio = cost_ratio if evaluation_cost_ratio is None else evaluation_cost_ratio
+    if float(eval_ratio) <= 0:
+        raise ValueError("evaluation_cost_ratio must be positive")
 
     kwargs = dict(method_kwargs or {})
     record = _base_record(
@@ -509,6 +633,11 @@ def run_one(
         method_kwargs=kwargs,
         tolerance=tolerance,
         time_budget_sec=time_budget_sec,
+        hard_timeout_sec=(
+            float(time_budget_sec) if hard_timeout_sec is None else float(hard_timeout_sec)
+        ),
+        evaluation_cost_ratio=eval_ratio,
+        config_hash=config_hash,
         data_meta=data_meta,
     )
 
@@ -526,11 +655,13 @@ def run_one(
 
     record["method_module"] = getattr(method_class, "__module__", None)
     record["method_class"] = getattr(method_class, "__name__", None)
-    c_fn = float(cost_ratio)
+    train_c_fn = float(cost_ratio)
+    eval_c_fn = float(eval_ratio)
     c_fp = 1.0
 
     candidates: list[dict[str, Any]] = []
     candidate_failures: list[dict[str, Any]] = []
+    hard_timeout_hit = False
     for C in grid:
         C_per_sample = make_per_sample_costs(
             y_train,
@@ -545,25 +676,45 @@ def run_one(
         }
         fit_kwargs.update(kwargs)
 
+        monitor = _RSSMonitor().start()
+        timer = _WallTimer()
+        start = datetime.now(timezone.utc)
+        failure_reason: str | None = None
+        failure_error: str | None = None
+        failure_traceback: str | None = None
         try:
             model = method_class()
             filtered_kwargs = filtered_fit_kwargs(model.fit, fit_kwargs)
             set_seed(seed)
-            start = datetime.now(timezone.utc)
-            timer = _WallTimer()
-            with timer:
-                model.fit(X_train, y_train, C_per_sample, **filtered_kwargs)
-            fit_time = timer.elapsed
+            with _hard_timeout(hard_timeout_sec):
+                with timer:
+                    model.fit(X_train, y_train, C_per_sample, **filtered_kwargs)
+        except _FitTimeoutError as exc:
+            failure_reason = "hard_timeout"
+            failure_error = f"{type(exc).__name__}: {exc}"
+            failure_traceback = traceback.format_exc(limit=6)
         except Exception as exc:
+            failure_reason = "fit_exception"
+            failure_error = f"{type(exc).__name__}: {exc}"
+            failure_traceback = traceback.format_exc(limit=6)
+        finally:
+            monitor.stop()
+            fit_time = timer.elapsed
+
+        if failure_reason is not None:
             candidate_failures.append(
                 {
                     "C": C,
-                    "reason": "fit_exception",
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "traceback": traceback.format_exc(limit=6),
-                    "fit_time_sec": None,
+                    "reason": failure_reason,
+                    "error": failure_error,
+                    "traceback": failure_traceback,
+                    "fit_time_sec": float(fit_time),
+                    "peak_memory_mb": monitor.delta_mb,
                 }
             )
+            if failure_reason == "hard_timeout":
+                hard_timeout_hit = True
+                break
             continue
 
         if fit_time > float(time_budget_sec):
@@ -576,6 +727,7 @@ def run_one(
                         f"{float(time_budget_sec):.3f}"
                     ),
                     "fit_time_sec": float(fit_time),
+                    "peak_memory_mb": monitor.delta_mb,
                 }
             )
             continue
@@ -585,12 +737,17 @@ def run_one(
             if val_scores.size != y_val.size or not np.all(np.isfinite(val_scores)):
                 raise ValueError("decision_function returned invalid validation scores")
             threshold = float(
-                select_threshold_min_cost(y_val, val_scores, c_fn=c_fn, c_fp=c_fp)
+                select_threshold_min_cost(
+                    y_val,
+                    val_scores,
+                    c_fn=eval_c_fn,
+                    c_fp=c_fp,
+                )
             )
             val_metrics = evaluate_scores(
                 y_val,
                 val_scores,
-                c_fn=c_fn,
+                c_fn=eval_c_fn,
                 c_fp=c_fp,
                 threshold=threshold,
             )
@@ -602,6 +759,7 @@ def run_one(
                     "error": f"{type(exc).__name__}: {exc}",
                     "traceback": traceback.format_exc(limit=6),
                     "fit_time_sec": float(fit_time),
+                    "peak_memory_mb": monitor.delta_mb,
                 }
             )
             continue
@@ -611,6 +769,9 @@ def run_one(
                 "C": float(C),
                 "model": model,
                 "fit_time_sec": float(fit_time),
+                "peak_memory_mb": monitor.delta_mb,
+                "process_rss_baseline_mb": monitor.baseline_mb,
+                "process_rss_peak_mb": monitor.peak_mb,
                 "threshold": threshold,
                 "val_metrics": val_metrics,
                 "started_utc": start.isoformat(),
@@ -618,6 +779,8 @@ def run_one(
         )
 
     record["candidate_failures"] = candidate_failures
+    record["timed_out"] = bool(hard_timeout_hit)
+    record["selection_incomplete"] = bool(hard_timeout_hit or candidate_failures)
     if not candidates:
         record["error"] = (
             "All C candidates failed. "
@@ -649,6 +812,9 @@ def run_one(
         sum(candidate["fit_time_sec"] for candidate in candidates)
         + sum(failure.get("fit_time_sec") or 0.0 for failure in candidate_failures)
     )
+    record["peak_memory_mb"] = selected.get("peak_memory_mb")
+    record["process_rss_baseline_mb"] = selected.get("process_rss_baseline_mb")
+    record["process_rss_peak_mb"] = selected.get("process_rss_peak_mb")
     record["threshold"] = selected_threshold
     record["val_cost_per_example"] = float(selected["val_metrics"]["cost_per_example"])
     record["val_pr_auc"] = float(selected["val_metrics"]["pr_auc"])
@@ -656,6 +822,7 @@ def run_one(
         {
             "C": candidate["C"],
             "fit_time_sec": candidate["fit_time_sec"],
+            "peak_memory_mb": candidate.get("peak_memory_mb"),
             "val_cost_per_example": candidate["val_metrics"]["cost_per_example"],
             "val_pr_auc": candidate["val_metrics"]["pr_auc"],
             "threshold": candidate["threshold"],
@@ -670,7 +837,7 @@ def run_one(
         test_metrics = evaluate_scores(
             y_test,
             test_scores,
-            c_fn=c_fn,
+            c_fn=eval_c_fn,
             c_fp=c_fp,
             threshold=selected_threshold,
         )
@@ -781,9 +948,14 @@ def run_one(
             "balanced_accuracy": float(test_metrics["balanced_accuracy"]),
             "threshold": float(test_metrics["threshold"]),
             "pr_curve": precision_recall_points(y_test, test_scores, max_points=200),
-            "peak_memory_mb": _process_peak_memory_mb(),
             "history_available": objective_history is not None,
+            "history_points": (
+                0 if objective_history is None else int(objective_history.size)
+            ),
             "history_truncated": bool(truncated),
+            "time_to_tolerance_upper_bound": bool(
+                objective_history is not None and objective_history.size <= 1
+            ),
             "objective_history": sampled_history,
             "time_history": sampled_times,
             "alphas_summary": alphas_summary,
@@ -803,6 +975,8 @@ def run_one(
         )
         if objective_history is None:
             record["tolerance_note"] = "no_objective_history"
+        elif objective_history.size <= 1:
+            record["tolerance_note"] = "insufficient_history_resolution"
         elif history_consistent is False:
             record["tolerance_note"] = "solver_objective_inconsistent_with_recomputed_objective"
         else:
@@ -827,11 +1001,12 @@ def run_one(
         save_run(record, results_dir, overwrite=overwrite)
     if logger is not None:
         logger.info(
-            "%-40s method=%-8s ratio=%-3s seed=%s C=%-6g cost=%.6g "
-            "pr_auc=%s t_tol=%s",
+            "%-40s method=%-8s train_ratio=%-3s eval_ratio=%-3s seed=%s "
+            "C=%-6g cost=%.6g pr_auc=%s t_tol=%s",
             dataset,
             method,
             _clean_ratio(cost_ratio),
+            _clean_ratio(eval_ratio),
             seed,
             record["C"],
             record["cost_per_example"],
@@ -866,47 +1041,6 @@ class _WallTimer:
             return 0.0
         stop = self.end if self.end is not None else self._time.perf_counter()
         return float(stop - self.start)
-
-
-def _stratified_cap_indices(y: np.ndarray, max_n: int, seed: int) -> np.ndarray:
-    n_samples = y.size
-    max_n = int(max_n)
-    if max_n >= n_samples:
-        return np.arange(n_samples)
-    if max_n <= 0:
-        raise ValueError("max_n must be positive")
-    try:
-        from sklearn.model_selection import train_test_split
-
-        selected, _ = train_test_split(
-            np.arange(n_samples),
-            train_size=max_n,
-            stratify=y,
-            random_state=int(seed),
-        )
-        return np.sort(selected).astype(np.int64)
-    except ValueError:
-        rng = np.random.default_rng(int(seed))
-        return np.sort(rng.choice(n_samples, size=max_n, replace=False)).astype(np.int64)
-
-
-def _cap_training_data(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    cap: int | None,
-    seed: int,
-) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
-    meta: dict[str, Any] = {
-        "train_cap": None if cap is None else int(cap),
-        "cap_applied": False,
-        "n_train_before_cap": int(X_train.shape[0]),
-    }
-    if cap is None or int(cap) >= X_train.shape[0]:
-        return X_train, y_train, meta
-    indices = _stratified_cap_indices(y_train, int(cap), seed)
-    meta["cap_applied"] = True
-    meta["n_train_after_cap"] = int(indices.size)
-    return X_train[indices], y_train[indices], meta
 
 
 def _apply_data_variant(
@@ -979,6 +1113,7 @@ def _build_ulb_data(
     seed: int,
     data_variant: Mapping[str, Any],
     logger: Any,
+    raw_sha256: str | None = None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -1013,7 +1148,15 @@ def _build_ulb_data(
         else:
             split_path = splits_dir / f"chronological_seed{int(seed)}.json"
         if split_path.exists():
-            splits = data_module.load_splits(split_path)
+            splits, split_metadata = data_module.load_splits_with_metadata(split_path)
+            data_module.validate_split_metadata(
+                split_metadata,
+                n_rows=len(frame),
+                n_positives=int(
+                    np.sum(frame[data_module.LABEL_COLUMN] == 1)
+                ),
+                source_sha256=raw_sha256,
+            )
             split_source = f"saved:{split_path}"
 
     if splits is None:
@@ -1221,6 +1364,7 @@ def _assign_reference_objectives(
         key = (
             record["dataset"],
             float(record["cost_ratio"]),
+            float(record.get("evaluation_cost_ratio", record["cost_ratio"])),
             int(record["seed"]),
             int(record["n_train"]),
         )
@@ -1228,6 +1372,25 @@ def _assign_reference_objectives(
 
     reference_method = config.get("reference_method")
     for records in groups.values():
+        if len(records) < 2:
+            for record in records:
+                record["reference_objective"] = None
+                record["relative_gap"] = None
+                record["time_to_tolerance_sec"] = None
+                record["reached_tolerance"] = False
+                record["tolerance_note"] = "insufficient_comparable_runs"
+                save_run(record, results_dir, overwrite=True)
+            if logger is not None:
+                logger.warning(
+                    "No comparable reference for dataset=%s ratio=%s seed=%s "
+                    "n_train=%s: only one successful method",
+                    records[0]["dataset"],
+                    records[0]["cost_ratio"],
+                    records[0]["seed"],
+                    records[0]["n_train"],
+                )
+            continue
+
         objectives = [
             float(record["objective"])
             for record in records
@@ -1259,9 +1422,19 @@ def _assign_reference_objectives(
 
             history = record.get("objective_history")
             times = record.get("time_history")
+            history_points = record.get("history_points")
+            if history_points is None:
+                history_points = 0 if history is None else len(history)
+            record["history_points"] = int(history_points)
+            record["time_to_tolerance_upper_bound"] = bool(
+                history_points <= 1
+            )
             if history is None:
                 record["time_to_tolerance_sec"] = None
                 record["tolerance_note"] = "no_objective_history"
+            elif history_points <= 1:
+                record["time_to_tolerance_sec"] = None
+                record["tolerance_note"] = "insufficient_history_resolution"
             elif record.get("history_consistent") is False:
                 record["time_to_tolerance_sec"] = None
                 record["tolerance_note"] = (
@@ -1284,10 +1457,12 @@ def _assign_reference_objectives(
 
         if logger is not None:
             logger.info(
-                "Reference objective %.6g for dataset=%s ratio=%s seed=%s n_train=%s",
+                "Reference objective %.6g for dataset=%s ratio=%s eval_ratio=%s "
+                "seed=%s n_train=%s",
                 reference,
                 records[0]["dataset"],
                 records[0]["cost_ratio"],
+                records[0].get("evaluation_cost_ratio"),
                 records[0]["seed"],
                 records[0]["n_train"],
             )
@@ -1313,8 +1488,16 @@ def run_experiment(
     source = data_cfg.get("source", "ulb")
     results_dir = Path(config.get("paths", {}).get("results_dir", "results"))
     overwrite_setting = (
-        bool(config.get("overwrite", True)) if overwrite is None else bool(overwrite)
+        bool(config.get("overwrite", False)) if overwrite is None else bool(overwrite)
     )
+    evaluation_cost_ratio = config.get("evaluation_cost_ratio")
+    time_budget_sec = float(config.get("time_budget_sec", 5400.0))
+    hard_timeout_sec = float(
+        config.get("hard_timeout_sec", time_budget_sec)
+    )
+    config_hash = hashlib.sha256(
+        json.dumps(dict(config), sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:16]
 
     if dry_run:
         print(f"# Resolved config: {experiment}")
@@ -1334,7 +1517,6 @@ def run_experiment(
                         for spec in methods:
                             if allowed_methods and spec["method"] not in allowed_methods:
                                 continue
-                            cap = config.get("method_caps", {}).get(spec["method"])
                             job_count += 1
                             subset_label = data_cfg.get("subset_n")
                             if subset_label is None:
@@ -1343,12 +1525,14 @@ def run_experiment(
                                 "  "
                                 f"data={data_variant.get('name', 'base')} "
                                 f"scale={scale if scale is not None else subset_label} "
-                                f"seed={seed} ratio={ratio} method={spec['method']} "
-                                f"variant={spec['variant']} cap={cap} "
+                                f"seed={seed} train_ratio={ratio} "
+                                f"eval_ratio={evaluation_cost_ratio if evaluation_cost_ratio is not None else ratio} "
+                                f"method={spec['method']} variant={spec['variant']} "
                                 f"C_grid={config.get('C_grid', [1.0])} "
                                 f"tol={config.get('tolerance', 1e-4)} "
-                                f"budget={config.get('time_budget_sec', 300)}s"
+                                f"budget={time_budget_sec}s hard_timeout={hard_timeout_sec}s"
                             )
+        print(f"# Config hash: {config_hash}")
         print(f"# Total planned jobs: {job_count}")
         return []
 
@@ -1365,7 +1549,16 @@ def run_experiment(
             level=config.get("logging", {}).get("level", "INFO"),
         )
 
-    logger.info("Starting experiment=%s methods=%s seeds=%s ratios=%s", experiment, [spec["method"] for spec in methods], seeds, ratios)
+    logger.info(
+        "Starting experiment=%s methods=%s seeds=%s train_ratios=%s "
+        "eval_ratio=%s config_hash=%s",
+        experiment,
+        [spec["method"] for spec in methods],
+        seeds,
+        ratios,
+        evaluation_cost_ratio if evaluation_cost_ratio is not None else "same_as_train",
+        config_hash,
+    )
 
     availability: dict[str, tuple[bool, str | None]] = {}
     for spec in methods:
@@ -1402,8 +1595,13 @@ def run_experiment(
             len(raw_frame) - len(cleaned),
         )
         scale_values = [None]
+        raw_sha256 = None
+        if data_cfg.get("subset_n") is None and data_cfg.get("use_saved_splits", True):
+            raw_sha256 = data_module.sha256_file(raw_path)
+            logger.info("Raw data SHA-256: %s", raw_sha256)
     elif source == "synthetic":
         cleaned = None
+        raw_sha256 = None
         scale_values = [int(n) for n in data_cfg.get("synthetic_n_list", [10000])]
     else:
         raise ValueError(f"Unknown data source: {source}")
@@ -1437,6 +1635,7 @@ def run_experiment(
                         seed,
                         data_variant,
                         logger,
+                        raw_sha256=raw_sha256,
                     )
                 else:
                     (
@@ -1458,26 +1657,35 @@ def run_experiment(
 
                 for ratio in ratios:
                     for spec in specs_for_variant:
-                        cap = config.get("method_caps", {}).get(spec["method"])
-                        X_fit, y_fit, cap_meta = _cap_training_data(
-                            X_train,
-                            y_train,
-                            cap=cap,
-                            seed=seed,
-                        )
                         job_meta = dict(data_meta)
-                        job_meta.update(cap_meta)
                         job_meta["method_variant"] = spec["variant"]
+                        job_meta["config_hash"] = config_hash
+                        if not overwrite_setting:
+                            candidate_path = run_file_path(
+                                results_dir,
+                                experiment,
+                                dataset_id,
+                                spec["method"],
+                                ratio,
+                                seed,
+                                spec["variant"],
+                            )
+                            if candidate_path.exists():
+                                raise FileExistsError(
+                                    "Run already exists and overwrite is disabled: "
+                                    f"{candidate_path}"
+                                )
                         logger.info(
                             "Running experiment=%s dataset=%s method=%s variant=%s "
-                            "ratio=%s seed=%s n_train=%d",
+                            "train_ratio=%s eval_ratio=%s seed=%s n_train=%d",
                             experiment,
                             dataset_id,
                             spec["method"],
                             spec["variant"],
                             ratio,
+                            evaluation_cost_ratio if evaluation_cost_ratio is not None else ratio,
                             seed,
-                            X_fit.shape[0],
+                            X_train.shape[0],
                         )
                         record = run_one(
                             experiment=experiment,
@@ -1485,22 +1693,23 @@ def run_experiment(
                             method=spec["method"],
                             seed=seed,
                             cost_ratio=ratio,
-                            X_train=X_fit,
-                            y_train=y_fit,
+                            X_train=X_train,
+                            y_train=y_train,
                             X_val=X_val,
                             y_val=y_val,
                             X_test=X_test,
                             y_test=y_test,
                             C_grid=config.get("C_grid", [1.0]),
                             tolerance=float(config.get("tolerance", 1e-4)),
-                            time_budget_sec=float(
-                                config.get("time_budget_sec", 300.0)
-                            ),
+                            time_budget_sec=time_budget_sec,
+                            hard_timeout_sec=hard_timeout_sec,
+                            evaluation_cost_ratio=evaluation_cost_ratio,
                             method_kwargs=spec["method_kwargs"],
                             method_registry_extra=method_registry_extra,
                             variant=spec["variant"],
                             results_dir=results_dir,
                             reference_objective=None,
+                            config_hash=config_hash,
                             overwrite=overwrite_setting,
                             history_max_points=int(
                                 config.get("history_max_points", 10000)
@@ -1529,6 +1738,83 @@ def _record_for_csv(record: Mapping[str, Any]) -> dict[str, Any]:
         else:
             row[key] = value
     return row
+
+
+def pairwise_wilcoxon_tests(
+    frame: pd.DataFrame,
+    *,
+    metrics: Sequence[str] = PAIRWISE_METRICS,
+    min_pairs: int = 2,
+) -> pd.DataFrame:
+    """Paired Wilcoxon tests between every pair of runs in the same group."""
+    columns = [
+        "dataset",
+        "cost_ratio",
+        "evaluation_cost_ratio",
+        "n_train",
+        "metric",
+        "method_a",
+        "method_b",
+        "n_pairs",
+        "statistic",
+        "p_value",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    data = frame.copy()
+    if "variant" in data.columns:
+        data["variant"] = data["variant"].fillna("base")
+    else:
+        data["variant"] = "base"
+    data["label"] = data["method"].astype(str).where(
+        data["variant"].astype(str).isin(["base", "None", "nan"]),
+        data["method"].astype(str) + ":" + data["variant"].astype(str),
+    )
+    group_keys = ["dataset", "cost_ratio", "evaluation_cost_ratio", "n_train"]
+    for key in group_keys:
+        if key not in data.columns:
+            data[key] = None
+
+    rows: list[dict[str, Any]] = []
+    for keys, group in data.groupby(group_keys, dropna=False):
+        key_values = dict(zip(group_keys, keys))
+        labels = sorted(group["label"].unique())
+        for label_a, label_b in combinations(labels, 2):
+            left = group[group["label"] == label_a]
+            right = group[group["label"] == label_b]
+            merged = left.merge(
+                right,
+                on="seed",
+                suffixes=("_a", "_b"),
+                how="inner",
+            )
+            for metric in metrics:
+                column_a = f"{metric}_a"
+                column_b = f"{metric}_b"
+                if column_a not in merged.columns or column_b not in merged.columns:
+                    continue
+                pairs = merged[[column_a, column_b]].apply(
+                    pd.to_numeric, errors="coerce"
+                ).dropna()
+                if len(pairs) < min_pairs:
+                    continue
+                result = wilcoxon_test(
+                    pairs[column_a].to_numpy(),
+                    pairs[column_b].to_numpy(),
+                )
+                rows.append(
+                    {
+                        **key_values,
+                        "metric": metric,
+                        "method_a": label_a,
+                        "method_b": label_b,
+                        "n_pairs": result["n_pairs"],
+                        "statistic": result["statistic"],
+                        "p_value": result["p_value"],
+                    }
+                )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def aggregate_runs(
@@ -1561,7 +1847,14 @@ def aggregate_runs(
     tables_dir.mkdir(parents=True, exist_ok=True)
     runs_frame.to_csv(tables_dir / f"{_slug(experiment)}_runs.csv", index=False)
 
-    group_keys = ["dataset", "method", "variant", "cost_ratio", "n_train"]
+    group_keys = [
+        "dataset",
+        "method",
+        "variant",
+        "cost_ratio",
+        "evaluation_cost_ratio",
+        "n_train",
+    ]
     for key in group_keys:
         if key not in runs_frame.columns:
             runs_frame[key] = None
@@ -1623,10 +1916,16 @@ def aggregate_runs(
         tables_dir / f"{_slug(experiment)}_summary.csv",
         index=False,
     )
+    wilcoxon_frame = pairwise_wilcoxon_tests(successful_frame)
+    wilcoxon_frame.to_csv(
+        tables_dir / f"{_slug(experiment)}_wilcoxon.csv",
+        index=False,
+    )
     if logger is not None:
         logger.info(
-            "Aggregated %d run(s) into %s",
+            "Aggregated %d run(s), %d pairwise Wilcoxon row(s) into %s",
             len(records),
+            len(wilcoxon_frame),
             tables_dir,
         )
     return summary_frame

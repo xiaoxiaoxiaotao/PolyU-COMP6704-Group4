@@ -4,15 +4,14 @@ methods: [smo, pegasos, admm, pa_admm, cvxpy]
 seeds: [0, 1, 2, 3, 4]
 cost_ratios: [10, 20, 50]
 tolerance: 0.001
-time_budget_sec: 900
+time_budget_sec: 5400
 reference_method: null
 data:
   subset_n: null
   split_protocol: stratified
   use_saved_splits: true
-method_caps:
-  smo: 10000
-  cvxpy: 20000
 notes: >-
-  SMO is capped at 10k and CVXPY at 20k (stratified caps); Pegasos/ADMM/PA-ADMM
-  run on all training rows. Saved split files are the source of truth.
+  All five methods receive the full cleaned training set (198,608 rows) and the
+  same saved split. No per-method caps. SMO/CVXPY may time out or run out of
+  memory; those runs are recorded as failures and are not ranked. Use
+  main_capped for the all-five same-10k comparison if they fail.

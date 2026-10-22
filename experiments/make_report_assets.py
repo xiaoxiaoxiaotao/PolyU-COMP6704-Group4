@@ -31,6 +31,11 @@ TABLE_METRICS: dict[str, list[str]] = {
         "cost_per_example",
         "pr_auc",
     ],
+    "main_capped": [
+        "time_to_tolerance_sec",
+        "cost_per_example",
+        "pr_auc",
+    ],
     "main_full": [
         "time_to_tolerance_sec",
         "fit_time_sec",
@@ -47,7 +52,8 @@ TABLE_METRICS: dict[str, list[str]] = {
 }
 
 TABLE_HEADER = (
-    "dataset,method,variant,cost_ratio,n_train,n,mean,std,ci_low,ci_high\n"
+    "dataset,method,variant,cost_ratio,evaluation_cost_ratio,n_train,"
+    "n,mean,std,ci_low,ci_high\n"
 )
 
 
@@ -76,6 +82,12 @@ def create_empty_tables(tables_dir: Path) -> list[Path]:
         for metric in metrics:
             path = table_path(tables_dir, experiment, metric)
             if path.exists():
+                try:
+                    existing = pd.read_csv(path)
+                except pd.errors.EmptyDataError:
+                    existing = pd.DataFrame()
+                if existing.empty:
+                    path.write_text(TABLE_HEADER, encoding="utf-8")
                 continue
             path.write_text(TABLE_HEADER, encoding="utf-8")
             created.append(path)
@@ -447,6 +459,14 @@ def main() -> None:
             "time_to_tolerance_sec",
             "main_full_time_to_tolerance.pdf",
             "Main-full: time to tolerance",
+        ),
+        plot_metric_bars(
+            tables_dir,
+            figures_dir,
+            "main_capped",
+            "time_to_tolerance_sec",
+            "main_capped_time_to_tolerance.pdf",
+            "Main-capped: all-five common-10k time to tolerance",
         ),
         plot_convergence(raw_root, figures_dir),
         plot_metric_lines(

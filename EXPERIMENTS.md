@@ -160,7 +160,8 @@ class BinarySVM:
 - `C_per_sample`: `float64` array `(n,)`; `C_i = C * w_{y_i}`, normalized to mean one.
 - After `fit`, record: `w`, `b`, `n_iter`, `converged`, `objective`,
   `objective_history`, `time_history`; method-specific state (`alphas`, `rho_history`).
-  The harness measures `fit_time_sec` and process peak memory.
+  The harness measures `fit_time_sec` and a per-fit sampled RSS delta; at least two
+  aligned history points are required for a non-null time-to-tolerance.
 - `predict` returns `{-1, +1}`; `decision_function` returns raw scores.
 - Solver owners must implement the module/class names in §4.2 and pass
   `experiments/check_solver.py --method <name>` before running experiments.
@@ -220,15 +221,16 @@ class BinarySVM:
 #### CVXPY baseline (WP1)
 
 - Primal cost-sensitive SVM with per-sample `C_i`; ECOS solver (fallback SCS).
-- Stratified subset (default 20k); record subset size and solver status.
-- Returns `w`, `b`, objective, solve time.
+- Runs on the same training rows as the other methods; no subset cap. At full n it may be
+  infeasible/time out; the failure is recorded. `main_capped` is the fair all-five fallback.
+- Returns `w`, `b`, objective, solver status/solve time.
 
 ### 4.4 Experiment entry points under `experiments/`
 
 | File | Runs |
 |---|---|
 | `run_correctness.py` | SMO vs LIBSVM; ADMM/PA-ADMM vs CVXPY on a 10k subset |
-| `run_main.py` | `main_fast` (50k, 3 seeds) and `main_full` (284k, 5 seeds) |
+| `run_main.py` | `main_fast` (50k, 3 seeds), `main_full` (283,726 cleaned, 5 seeds), and `main_capped` (common 10k, 3 seeds) |
 | `run_cost_sweep.py` | Cost ratios `1, 3, 5, 10, 20, 50` on a 50k subset |
 | `run_ablation.py` | PA-ADMM component ablation |
 | `run_stress.py` | Fraud-rate, label-noise and chronological stress tests |
@@ -245,25 +247,30 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 | ID | Data | Methods | Cost ratios | Seeds | Purpose |
 |---|---|---|---|---|---|
 | `correctness` | 10k stratified subset | SMO vs LIBSVM; ADMM/PA-ADMM vs CVXPY | 10:1 | 1 | Verify objectives, KKT/residuals, predictions |
-| `main_fast` | 50k stratified subset | SMO (10k), Pegasos, ADMM, PA-ADMM, CVXPY (10k) | 10, 20, 50 | 3 | Fast iteration; debug the matrix |
-| `main_full` | full 284,807; SMO on 10k; CVXPY on 20k | SMO, Pegasos, ADMM, PA-ADMM, CVXPY | 10, 20, 50 | 5 | Final numbers for the report |
-| `cost_sweep` | 50k subset | Pegasos, ADMM, PA-ADMM | 1, 3, 5, 10, 20, 50 | 1 | How the ranking changes with cost asymmetry |
+| `main_fast` | 50k stratified subset | all five on the same 50k | 10, 20, 50 | 3 | Fast iteration; debug the matrix |
+| `main_full` | full cleaned ULB (283,726; train 198,608) | all five on the same full training set | 10, 20, 50 | 5 | Full-data comparison; SMO/CVXPY may fail |
+| `main_capped` | common 10k subset | all five on the same 10k | 10, 20, 50 | 3 | Fair all-method fallback if full SMO/CVXPY fail |
+| `cost_sweep` | 50k subset | Pegasos, ADMM, PA-ADMM | 1, 3, 5, 10, 20, 50; **evaluated at fixed 20:1** | 1 | How training-weight asymmetry changes a common-cost deployment metric |
 | `ablation` | full data | PA-ADMM variants | 20:1 | 3 | `K ∈ {0,5,10,20}`; adaptive ρ on/off; `alpha ∈ {1.0,1.5,1.8}`; `rho0 ∈ {0.1,1,10}` |
 | `stress_imbalance` | training prevalence adjusted to 0.1/0.5/1/5/10% (positive or negative subsampling, recorded) | Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Extreme-imbalance behaviour |
-| `stress_noise` | 5%/10% training labels flipped | SMO (10k), Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Objective–generalization gap |
+| `stress_noise` | 5%/10% training labels flipped | SMO, Pegasos, ADMM, PA-ADMM on the same full training rows | 20:1 | 3 | Objective–generalization gap |
 | `temporal` | chronological 70/15/15 | Pegasos, ADMM, PA-ADMM | 20:1 | 1–3 | Distribution drift |
 | `scaling` | synthetic `n = 10k, 25k, 50k, 100k, 200k`; `d = 20` | Pegasos, ADMM, PA-ADMM | 10:1 | 3 | Runtime/memory vs `n` |
 
-### 5.1 Practical caps
+### 5.1 Same-data policy, feasibility, and timeouts
 
-- SMO: `n <= 10k`; if the kernel cache exceeds the memory budget, reduce to 5k and record the
-  cap. Full 284k is intentionally not attempted; the **O(n²) memory wall is a finding**.
-- CVXPY: `n <= 20k` (stratified subset).
-- ADMM/PA-ADMM: full data is feasible because `d = 29` (V1–V28 + Amount; Time is not a
-  feature) and the linear system is 30×30.
-- Pegasos: full data; O(d) per iteration.
-- Per-fit time budget: 300 s for fast/correctness runs, 900 s for full runs. Log timeouts and
-  OOM as failures; do not drop them silently.
+- **No per-method training cap.** Every method inside an experiment receives exactly the same
+  `X_train`, `y_train`, split, and `C_i`. Mixed-size comparisons are not allowed.
+- `main_full` attempts all five methods on the full training set. SMO/CVXPY may time out or run
+  out of memory; those runs are recorded as failures and are not ranked. Successful methods are
+  compared against each other on the same full data.
+- `main_capped` is the fair all-five fallback on a common 10k training subset; use it when
+  SMO/CVXPY cannot complete the full-data matrix.
+- ADMM/PA-ADMM full data is feasible because `d = 29` (V1–V28 + Amount; Time is not a feature)
+  and the linear system is 30×30. Pegasos is O(d) per iteration.
+- Per-fit time budget and hard timeout are both **5400 s (90 minutes)**. Timeout/OOM is recorded
+  as a failure; do not drop it silently. Solver C-grid tuning is included in
+  `tuning_fit_time_sec`, separate from the selected fit's `fit_time_sec`.
 
 ---
 
@@ -276,6 +283,11 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 the budget, record `reached = false`, `time_to_tolerance = null`, and the final gap. This is
 the main "faster" claim.
 
+A run needs at least two aligned objective/timestamp points for a non-null time-to-tolerance;
+single-checkpoint solvers (e.g. an interior-point solve reported as one final point) get
+`time_to_tolerance = null`. A comparison group needs at least two successful methods; a
+single successful run never uses itself as its own reference.
+
 ### 6.2 Secondary metrics
 
 - `cost_per_example = (c_FN * FN + c_FP * FP) / n_test`;
@@ -283,29 +295,43 @@ the main "faster" claim.
 - `recall_at_fpr_0.001` and `recall_at_fpr_0.01`;
 - `balanced_accuracy`;
 - `objective` (weighted training objective) and `relative_gap`;
-- `n_iter`, `fit_time_sec`, `peak_memory_mb`, `rho_history` (ADMM/PA-ADMM).
+- `n_iter`, `fit_time_sec`, `tuning_fit_time_sec`, and per-fit sampled-RSS
+  `peak_memory_mb` (`process_rss_peak_mb` is retained for audit);
+- `rho_history` (ADMM/PA-ADMM) and `alphas_summary` (SMO);
+- `config_hash`, `training_cost_ratio`, `evaluation_cost_ratio`, `costs_source`.
 
 ### 6.3 Reference objective
 
 - Correctness runs: CVXPY/LIBSVM reference.
-- Full-data runs: the best observed training objective among the methods on the same split.
+- Full-data runs: the best observed training objective among the methods on the same split and
+  the same training rows. Groups with only one successful method get no time-to-tolerance.
 - Store `reference_objective` in every JSON so the gap is reproducible.
 - Never use test data to choose the reference or the threshold.
+- Split files are validated against the raw CSV SHA-256, cleaned row count, and positive count
+  before use.
 
 ### 6.4 Threshold and tuning
 
 - Select the decision threshold on **validation** to minimize validation cost.
 - Select base `C` on validation cost from `{0.01, 0.1, 1, 10, 100}`.
 - Class weights are fixed by the cost ratio; normalize to mean one.
-- SMO: linear kernel for the main matrix; RBF only on a 10k subset.
+- Until WP1's `src/costs.py` lands, the harness uses its documented sample-mean placeholder
+  and records `costs_source` in every JSON. Reconcile the two normalizations before final runs.
+- Training weights and deployment cost are separate: `cost_sweep` trains at each ratio but
+  selects thresholds and reports test cost at the common `evaluation_cost_ratio: 20`.
+- SMO: linear kernel for the main matrix; an RBF run, if included, is a separate
+  qualitative 10k check and is never mixed into the main full-data ranking.
 - Pegasos: `C` grid and learning-rate/epoch settings.
 - ADMM/PA-ADMM: `rho0`, `alpha`, adaptive ρ; PA-ADMM also `K`.
 - No test-set tuning; no per-method early stopping on test.
 
 ### 6.5 Fairness controls
 
-- Same split indices, `C_i`, tolerance, single-threaded execution, and hardware.
-- Same wall-clock budget per fit; report both per-iteration and per-time behaviour.
+- Same split indices, training rows, `C_i`, tolerance, single-threaded execution, and hardware.
+  No method gets a different training subset.
+- Same hard timeout per fit (5400 s); report both per-iteration and per-time behaviour.
+- Do not overwrite run JSONs; every run records a config hash.
+- Report `fit_time_sec` with `tuning_fit_time_sec`, not the selected fit alone.
 - Warm start is used **only** by PA-ADMM; cold-start ADMM is the baseline.
 - Record CPU/RAM in run metadata.
 - Five seeds for `main_full`; mean ± std, bootstrap 95% CI, Wilcoxon signed-rank tests.
@@ -362,11 +388,18 @@ results/
 }
 ```
 
+Additional audit fields in the implementation: `training_cost_ratio`, `evaluation_cost_ratio`,
+`config_hash`, `costs_source`, `hard_timeout_sec`, `history_points`,
+`time_to_tolerance_upper_bound`, `selection_incomplete`, `tuning_fit_time_sec`,
+`process_rss_peak_mb`, and `alphas_summary`/`rho_history` for the relevant solvers.
+`peak_memory_mb` is a per-fit sampled process-RSS delta, not a lifetime maximum.
+
 ### 7.2 Tables and figures
 
 - Tables: one row per run; aggregated tables with mean/std and `n_seeds`.
 - Figures: convergence (objective vs time), time-to-tolerance bars, cost vs cost ratio,
-  PR curves, recall@FPR, scaling (runtime/memory vs n), ρ sensitivity.
+  PR curves, recall@FPR, scaling (runtime/memory vs n), ρ sensitivity, and the
+  all-five `main_capped` comparison.
 - Final figures for the report go in `results/figures/`; slides reuse them.
 
 ### 7.3 Naming rules
@@ -377,7 +410,8 @@ results/
 - Dataset IDs: `ulb`, `synthetic`.
 - Cost ratio: integer `c_FN/c_FP` (`ratio-20`).
 - Seed: `seed-0`, no padding.
-- Never overwrite a run; use a new timestamp/log or config hash.
+- Runs are not overwritten by default (`overwrite: false`); every JSON stores a `config_hash`.
+  For a deliberate rerun, use a fresh results directory or explicitly enable overwrite.
 
 ---
 
@@ -427,8 +461,10 @@ The whole project is done when:
   report variance. Do not report a single split's accuracy.
 - **Cost ratios are assumptions:** the main ratio grid is illustrative. Report the full sweep
   and frame conclusions as sensitivity, not a deployment recommendation.
-- **SMO memory:** O(n²) kernel memory; cap at 5k–10k and report the cap. The memory wall is a
-  finding, not a bug.
+- **SMO memory:** an explicit O(n²) kernel matrix is impossible at full n (~316 GB at 198k).
+  `main_full` still attempts SMO on the full data with a 90-minute hard timeout; if it fails,
+  that is a recorded finding. Use `main_capped` for the fair all-five 10k comparison; do not
+  silently substitute a capped run into the full-data ranking.
 - **ADMM's dense solve:** `d = 29` makes the 30×30 system cheap; do not extrapolate to
   high-dimensional data without a sparse-aware variant.
 - **PA-ADMM may not win:** report the component ablation and the negative result. The

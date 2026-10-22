@@ -6,7 +6,7 @@ seeds: [0, 1, 2]
 cost_ratios: [20]
 C_grid: [1.0]
 tolerance: 0.001
-time_budget_sec: 900
+time_budget_sec: 5400
 reference_method: null
 data:
   subset_n: null

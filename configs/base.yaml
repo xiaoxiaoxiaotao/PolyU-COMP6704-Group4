@@ -7,11 +7,11 @@ seeds: [0]
 cost_ratios: [10]
 C_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
 tolerance: 0.0001
-time_budget_sec: 300
-
-method_caps:
-  smo: 10000
-  cvxpy: 20000
+time_budget_sec: 5400
+hard_timeout_sec: 5400
+# Train with cost_ratio; select threshold and report cost under this common
+# evaluation cost when set. null means "same as the training cost ratio".
+evaluation_cost_ratio: null
 
 method_kwargs:
   smo: {}
@@ -61,5 +61,6 @@ logging:
 
 aggregate: true
 history_max_points: 10000
-overwrite: true
+# Never silently overwrite a run; set true only for disposable local reruns.
+overwrite: false
 notes: null

@@ -4,15 +4,12 @@ methods: [smo, pegasos, admm, pa_admm]
 seeds: [0, 1, 2]
 cost_ratios: [20]
 tolerance: 0.001
-time_budget_sec: 900
+time_budget_sec: 5400
 reference_method: null
 data:
   subset_n: null
   split_protocol: stratified
   use_saved_splits: true
-method_caps:
-  smo: 10000
-  cvxpy: 20000
 data_variants:
   # The natural training prevalence is 0.167%, so positive-only subsampling can
   # only reach 0.1%. class_rate uses positive subsampling below that rate and
@@ -45,6 +42,8 @@ data_variants:
     type: label_noise
     rate: 0.10
     methods: [smo, pegasos, admm, pa_admm]
+# All methods inside a variant use the same full training rows and the same
+# split; SMO failures/timeouts are recorded rather than capped to different data.
   - name: chronological
     split_protocol: chronological
     methods: [pegasos, admm, pa_admm]

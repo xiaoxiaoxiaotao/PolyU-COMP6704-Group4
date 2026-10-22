@@ -420,6 +420,11 @@ def check_solver_contract(
     else:
         details["n_objective_history"] = int(objective_history.size)
         details["objective_final"] = float(objective_history[-1])
+        if objective_history.size < 2:
+            warnings.append(
+                "objective_history has fewer than two points; "
+                "time_to_tolerance will be null"
+            )
         if time_history is None:
             warnings.append(
                 "missing aligned 'time_history'; time_to_tolerance will be null"
