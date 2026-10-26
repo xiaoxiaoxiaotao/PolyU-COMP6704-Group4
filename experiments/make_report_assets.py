@@ -36,6 +36,12 @@ TABLE_METRICS: dict[str, list[str]] = {
         "cost_per_example",
         "pr_auc",
     ],
+    "predictive": [
+        "cost_per_example",
+        "pr_auc",
+        "recall_at_fpr_0.001",
+        "balanced_accuracy",
+    ],
     "main_full": [
         "time_to_tolerance_sec",
         "fit_time_sec",
@@ -52,7 +58,7 @@ TABLE_METRICS: dict[str, list[str]] = {
 }
 
 TABLE_HEADER = (
-    "dataset,method,variant,cost_ratio,evaluation_cost_ratio,n_train,"
+    "dataset,method,variant,cost_ratio,evaluation_cost_ratio,n_train,C,"
     "n,mean,std,ci_low,ci_high\n"
 )
 

@@ -3,15 +3,26 @@ experiment: main_fast
 methods: [smo, pegasos, admm, pa_admm, cvxpy]
 seeds: [0, 1, 2]
 cost_ratios: [10, 20, 50]
+# Fixed across methods for an identical QP; thresholds remain validation-only.
+C_grid: [1.0]
 tolerance: 0.001
 time_budget_sec: 5400
 reference_method: null
+reuse_existing: true
+method_kwargs:
+  admm:
+    rho0: 1.0
+    adaptive_rho: true
+    alpha: 1.0
+    max_iter: 20000
+  pa_admm:
+    max_iter: 20000
 data:
   subset_n: 50000
   subset_seed: 0   # same 50k subset for all seeds; seed controls the 70/15/15 split
   split_protocol: stratified
   use_saved_splits: false
 notes: >-
-  All five methods receive exactly the same 50k training subset and split.
-  SMO/CVXPY may hit the 90-minute hard timeout; failures are recorded, not
-  replaced by another method's result.
+  All five methods receive exactly the same 50k training subset, split, and
+  fixed C=1. SMO/CVXPY may hit the 90-minute hard timeout; failures are
+  recorded, not replaced by another method's result.

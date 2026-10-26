@@ -181,8 +181,12 @@ time_to_tolerance = t_k at the first k with relative_gap_k <= tol
 ```
 
 where `J_ref` is CVXPY in correctness runs and the best observed canonical
-objective in the same `(dataset, ratio, seed, n_train)` group otherwise.
-Therefore:
+objective in the same `(dataset, ratio, eval ratio, seed, n_train, selected C)`
+group otherwise. The selected `C` is part of the grouping key because changing
+`C` defines a different QP; runs with different selected `C` are never compared
+on objective, relative gap, or time-to-tolerance. The main configs therefore
+fix `C=1` across methods; `configs/predictive.yaml` tunes `C` per method and is
+used only for predictive metrics. Therefore:
 
 - **`objective_history` is required** for the primary metric.
 - **`time_history` is effectively required** for a non-null wall-clock time,
@@ -261,13 +265,17 @@ inside `time_history`.
 The harness owns this protocol; solvers should not duplicate it:
 
 1. For each `C` in the configured grid, fit on the training partition with the
-   given `C_per_sample`.
+   given `C_per_sample`. The main comparison configs use `C_grid: [1.0]` so all
+   methods solve the same QP; `configs/predictive.yaml` uses the full grid.
 2. Select the cost-minimizing threshold on **validation** scores.
-3. Choose the `C` with the lowest validation cost (ties to smaller `C`).
+3. Choose the `C` with the lowest validation cost (ties to smaller `C`). With a
+   single-element grid this step is a no-op.
 4. Evaluate the selected model **once** on test with the frozen threshold.
 5. Record `time_to_tolerance`, final gap, cost/example, PR-AUC,
    recall@FPR 0.001/0.01, balanced accuracy, iterations, fit/tuning time, memory.
-6. Reference objectives are computed post-hoc per comparison group.
+6. Reference objectives are computed post-hoc per comparison group, which
+   includes the selected `C`; pairwise objective tests also require the same
+   selected `C`.
 
 ### Correctness reference
 

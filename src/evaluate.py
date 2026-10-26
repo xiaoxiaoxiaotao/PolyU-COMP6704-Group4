@@ -54,6 +54,8 @@ METHOD_REGISTRY: dict[str, tuple[str, str]] = {
     "cvxpy": ("src.baseline_cvxpy", "CVXPYLinearSVM"),
 }
 
+COSTS_SOURCE = "harness_placeholder_sample_mean"
+
 REQUIRED_RUN_FIELDS = (
     "experiment",
     "dataset",
@@ -107,6 +109,12 @@ PAIRWISE_METRICS = (
     "recall_at_fpr_0.01",
     "balanced_accuracy",
     "objective",
+)
+
+# These quantities are defined by the QP selected through C; comparing runs
+# with different selected C would compare different optimization problems.
+OBJECTIVE_DEPENDENT_METRICS = frozenset(
+    {"objective", "relative_gap", "time_to_tolerance_sec"}
 )
 
 
@@ -434,6 +442,65 @@ def save_run(
     return path
 
 
+def _load_run_record(path: str | Path) -> dict[str, Any]:
+    with Path(path).open("r", encoding="utf-8") as handle:
+        record = json.load(handle)
+    if not isinstance(record, dict):
+        raise TypeError(f"Run file {path} does not contain a JSON object")
+    return record
+
+
+def _reuse_mismatches(
+    record: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> list[str]:
+    """Return job fields that differ from an existing successful run."""
+    mismatches: list[str] = []
+    numeric_fields = {
+        "cost_ratio",
+        "evaluation_cost_ratio",
+        "tolerance",
+        "time_budget_sec",
+        "hard_timeout_sec",
+    }
+    for key, expected_value in expected.items():
+        actual = record.get(key)
+        if key == "data_meta":
+            actual_meta = dict(actual or {})
+            expected_meta = dict(expected_value or {})
+            actual_meta.pop("config_hash", None)
+            expected_meta.pop("config_hash", None)
+            if actual_meta != expected_meta:
+                mismatches.append(key)
+        elif key in numeric_fields:
+            try:
+                same = np.isclose(
+                    float(actual),
+                    float(expected_value),
+                    rtol=0.0,
+                    atol=1e-12,
+                )
+            except (TypeError, ValueError):
+                same = False
+            if not same:
+                mismatches.append(key)
+        elif key == "C_grid":
+            try:
+                same = [float(value) for value in actual] == [
+                    float(value) for value in expected_value
+                ]
+            except (TypeError, ValueError):
+                same = False
+            if not same:
+                mismatches.append(key)
+        elif key == "hyperparams":
+            if dict(actual or {}) != dict(expected_value or {}):
+                mismatches.append(key)
+        elif actual != expected_value:
+            mismatches.append(key)
+    return mismatches
+
+
 def _base_record(
     *,
     experiment: str,
@@ -476,7 +543,7 @@ def _base_record(
         "C": None,
         "C_grid": [float(value) for value in C_grid],
         "hyperparams": dict(method_kwargs),
-        "costs_source": "harness_placeholder_sample_mean",
+        "costs_source": COSTS_SOURCE,
         "c_fn": float(ratio),
         "c_fp": 1.0,
         "eval_c_fn": float(eval_ratio),
@@ -1369,6 +1436,7 @@ def _assign_reference_objectives(
             float(record.get("evaluation_cost_ratio", record["cost_ratio"])),
             int(record["seed"]),
             int(record["n_train"]),
+            None if record.get("C") is None else float(record["C"]),
         )
         groups.setdefault(key, []).append(record)
 
@@ -1385,11 +1453,12 @@ def _assign_reference_objectives(
             if logger is not None:
                 logger.warning(
                     "No comparable reference for dataset=%s ratio=%s seed=%s "
-                    "n_train=%s: only one successful method",
+                    "n_train=%s C=%s: only one successful method",
                     records[0]["dataset"],
                     records[0]["cost_ratio"],
                     records[0]["seed"],
                     records[0]["n_train"],
+                    records[0].get("C"),
                 )
             continue
 
@@ -1492,6 +1561,7 @@ def run_experiment(
     overwrite_setting = (
         bool(config.get("overwrite", False)) if overwrite is None else bool(overwrite)
     )
+    reuse_existing = bool(config.get("reuse_existing", False))
     evaluation_cost_ratio = config.get("evaluation_cost_ratio")
     time_budget_sec = float(config.get("time_budget_sec", 5400.0))
     hard_timeout_sec = float(
@@ -1662,21 +1732,84 @@ def run_experiment(
                         job_meta = dict(data_meta)
                         job_meta["method_variant"] = spec["variant"]
                         job_meta["config_hash"] = config_hash
-                        if not overwrite_setting:
-                            candidate_path = run_file_path(
-                                results_dir,
-                                experiment,
-                                dataset_id,
-                                spec["method"],
-                                ratio,
-                                seed,
-                                spec["variant"],
-                            )
-                            if candidate_path.exists():
+                        job_overwrite = overwrite_setting
+                        candidate_path = run_file_path(
+                            results_dir,
+                            experiment,
+                            dataset_id,
+                            spec["method"],
+                            ratio,
+                            seed,
+                            spec["variant"],
+                        )
+                        if candidate_path.exists() and not overwrite_setting:
+                            if not reuse_existing:
                                 raise FileExistsError(
                                     "Run already exists and overwrite is disabled: "
                                     f"{candidate_path}"
                                 )
+                            existing = _load_run_record(candidate_path)
+                            if existing.get("status") == "ok":
+                                expected_job = {
+                                    "experiment": experiment,
+                                    "dataset": dataset_id,
+                                    "method": spec["method"],
+                                    "variant": spec["variant"],
+                                    "seed": int(seed),
+                                    "cost_ratio": ratio,
+                                    "evaluation_cost_ratio": (
+                                        evaluation_cost_ratio
+                                        if evaluation_cost_ratio is not None
+                                        else ratio
+                                    ),
+                                    "n_train": int(X_train.shape[0]),
+                                    "n_val": int(X_val.shape[0]),
+                                    "n_test": int(X_test.shape[0]),
+                                    "d": int(X_train.shape[1]),
+                                    "n_train_positives": int(np.sum(y_train > 0)),
+                                    "n_val_positives": int(np.sum(y_val > 0)),
+                                    "n_test_positives": int(np.sum(y_test > 0)),
+                                    "C_grid": [
+                                        float(value)
+                                        for value in config.get("C_grid", [1.0])
+                                    ],
+                                    "hyperparams": dict(spec["method_kwargs"]),
+                                    "tolerance": float(
+                                        config.get("tolerance", 1e-4)
+                                    ),
+                                    "time_budget_sec": float(time_budget_sec),
+                                    "hard_timeout_sec": float(hard_timeout_sec),
+                                    "costs_source": COSTS_SOURCE,
+                                    "data_meta": job_meta,
+                                }
+                                mismatches = _reuse_mismatches(
+                                    existing,
+                                    expected_job,
+                                )
+                                if mismatches:
+                                    raise RuntimeError(
+                                        "Existing run does not match the current "
+                                        f"job and cannot be reused ({', '.join(mismatches)}): "
+                                        f"{candidate_path}. Use overwrite=true to refit."
+                                    )
+                                existing["reused"] = True
+                                existing["reuse_config_hash"] = config_hash
+                                logger.info(
+                                    "Reusing existing run experiment=%s method=%s "
+                                    "variant=%s ratio=%s seed=%s",
+                                    experiment,
+                                    spec["method"],
+                                    spec["variant"],
+                                    ratio,
+                                    seed,
+                                )
+                                results.append(existing)
+                                continue
+                            logger.warning(
+                                "Existing run is not successful; rerunning: %s",
+                                candidate_path,
+                            )
+                            job_overwrite = True
                         logger.info(
                             "Running experiment=%s dataset=%s method=%s variant=%s "
                             "train_ratio=%s eval_ratio=%s seed=%s n_train=%d",
@@ -1712,7 +1845,7 @@ def run_experiment(
                             results_dir=results_dir,
                             reference_objective=None,
                             config_hash=config_hash,
-                            overwrite=overwrite_setting,
+                            overwrite=job_overwrite,
                             history_max_points=int(
                                 config.get("history_max_points", 10000)
                             ),
@@ -1754,6 +1887,7 @@ def pairwise_wilcoxon_tests(
         "cost_ratio",
         "evaluation_cost_ratio",
         "n_train",
+        "C",
         "metric",
         "method_a",
         "method_b",
@@ -1773,6 +1907,9 @@ def pairwise_wilcoxon_tests(
         data["variant"].astype(str).isin(["base", "None", "nan"]),
         data["method"].astype(str) + ":" + data["variant"].astype(str),
     )
+    if "C" not in data.columns:
+        data["C"] = None
+    has_selected_C = bool(data["C"].notna().any())
     group_keys = ["dataset", "cost_ratio", "evaluation_cost_ratio", "n_train"]
     for key in group_keys:
         if key not in data.columns:
@@ -1796,7 +1933,18 @@ def pairwise_wilcoxon_tests(
                 column_b = f"{metric}_b"
                 if column_a not in merged.columns or column_b not in merged.columns:
                     continue
-                pairs = merged[[column_a, column_b]].apply(
+                metric_rows = merged
+                c_value: float | None = None
+                if metric in OBJECTIVE_DEPENDENT_METRICS and has_selected_C:
+                    c_a = pd.to_numeric(merged["C_a"], errors="coerce")
+                    c_b = pd.to_numeric(merged["C_b"], errors="coerce")
+                    metric_rows = merged[(c_a == c_b) & c_a.notna()]
+                    if metric_rows.empty:
+                        continue
+                    c_value = float(
+                        pd.to_numeric(metric_rows["C_a"], errors="coerce").iloc[0]
+                    )
+                pairs = metric_rows[[column_a, column_b]].apply(
                     pd.to_numeric, errors="coerce"
                 ).dropna()
                 if len(pairs) < min_pairs:
@@ -1808,6 +1956,7 @@ def pairwise_wilcoxon_tests(
                 rows.append(
                     {
                         **key_values,
+                        "C": c_value,
                         "metric": metric,
                         "method_a": label_a,
                         "method_b": label_b,
@@ -1849,7 +1998,7 @@ def aggregate_runs(
     tables_dir.mkdir(parents=True, exist_ok=True)
     runs_frame.to_csv(tables_dir / f"{_slug(experiment)}_runs.csv", index=False)
 
-    group_keys = [
+    base_group_keys = [
         "dataset",
         "method",
         "variant",
@@ -1857,7 +2006,8 @@ def aggregate_runs(
         "evaluation_cost_ratio",
         "n_train",
     ]
-    for key in group_keys:
+    objective_group_keys = base_group_keys + ["C"]
+    for key in objective_group_keys:
         if key not in runs_frame.columns:
             runs_frame[key] = None
 
@@ -1875,9 +2025,15 @@ def aggregate_runs(
     for metric in METRICS_FOR_TABLES:
         if metric not in successful_frame.columns:
             continue
+        group_keys = (
+            objective_group_keys
+            if metric in OBJECTIVE_DEPENDENT_METRICS
+            else base_group_keys
+        )
         metric_rows: list[dict[str, Any]] = []
         for keys, group in successful_frame.groupby(group_keys, dropna=False):
             key_values = dict(zip(group_keys, keys))
+            key_values.setdefault("C", None)
             values = pd.to_numeric(group[metric], errors="coerce").dropna().to_numpy()
             n_values = int(values.size)
             if n_values:
@@ -1886,27 +2042,22 @@ def aggregate_runs(
                 ci_low, ci_high = bootstrap_ci(values, n_boot=n_boot, seed=0)
             else:
                 mean = std = ci_low = ci_high = float("nan")
-            metric_rows.append(
-                {
-                    **key_values,
-                    "n": n_values,
-                    "mean": mean,
-                    "std": std,
-                    "ci_low": ci_low,
-                    "ci_high": ci_high,
-                }
-            )
-            summary_rows.append(
-                {
-                    **key_values,
-                    "metric": metric,
-                    "n": n_values,
-                    "mean": mean,
-                    "std": std,
-                    "ci_low": ci_low,
-                    "ci_high": ci_high,
-                }
-            )
+            row = {
+                "dataset": key_values.get("dataset"),
+                "method": key_values.get("method"),
+                "variant": key_values.get("variant"),
+                "cost_ratio": key_values.get("cost_ratio"),
+                "evaluation_cost_ratio": key_values.get("evaluation_cost_ratio"),
+                "n_train": key_values.get("n_train"),
+                "C": key_values.get("C"),
+                "n": n_values,
+                "mean": mean,
+                "std": std,
+                "ci_low": ci_low,
+                "ci_high": ci_high,
+            }
+            metric_rows.append(row)
+            summary_rows.append({**row, "metric": metric})
         metric_frame = pd.DataFrame(metric_rows)
         metric_frame.to_csv(
             tables_dir / f"{_slug(experiment)}_{metric}.csv",

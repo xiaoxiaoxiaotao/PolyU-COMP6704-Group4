@@ -1,4 +1,4 @@
-"""Run the main comparison (use configs/main_fast.yaml or main_full.yaml)."""
+"""Run a main comparison config (main_fast, main_full, main_capped, predictive)."""
 
 from _common import main
 

@@ -1,0 +1,32 @@
+# Validation-tuned predictive comparison on the common 10k subset.
+# C is selected per method/seed by validation cost. Test cost, PR-AUC, recall,
+# and balanced accuracy are comparable across methods. Objective, relative gap,
+# and time-to-tolerance are grouped by the selected C, so runs that chose
+# different QPs are never compared on objective values.
+experiment: predictive
+methods: [smo, pegasos, admm, pa_admm, cvxpy]
+seeds: [0, 1, 2]
+cost_ratios: [10, 20, 50]
+C_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
+tolerance: 0.001
+time_budget_sec: 5400
+reference_method: null
+reuse_existing: true
+method_kwargs:
+  admm:
+    rho0: 1.0
+    adaptive_rho: true
+    alpha: 1.0
+    max_iter: 20000
+  pa_admm:
+    max_iter: 20000
+data:
+  subset_n: 10000
+  subset_seed: 0
+  split_protocol: stratified
+  use_saved_splits: false
+notes: >-
+  Predictive/operational comparison with validation-selected C on exactly the
+  same rows as main_capped. Do not use its objective or time-to-tolerance
+  numbers for cross-method solver ranking unless all methods selected the same
+  C; use main_capped/main_full for the fixed-C same-QP comparison.

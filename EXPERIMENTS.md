@@ -230,7 +230,7 @@ class BinarySVM:
 | File | Runs |
 |---|---|
 | `run_correctness.py` | SMO vs LIBSVM; ADMM/PA-ADMM vs CVXPY on a 10k subset |
-| `run_main.py` | `main_fast` (50k, 3 seeds), `main_full` (283,726 cleaned, 5 seeds), and `main_capped` (common 10k, 3 seeds) |
+| `run_main.py` | `main_fast` (50k, 3 seeds), `main_full` (283,726 cleaned, 5 seeds), `main_capped` (common 10k, 3 seeds), and `predictive` (validation-tuned C on the common 10k) |
 | `run_cost_sweep.py` | Cost ratios `1, 3, 5, 10, 20, 50` on a 50k subset |
 | `run_ablation.py` | PA-ADMM component ablation |
 | `run_stress.py` | Fraud-rate, label-noise and chronological stress tests |
@@ -250,6 +250,7 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 | `main_fast` | 50k stratified subset | all five on the same 50k | 10, 20, 50 | 3 | Fast iteration; debug the matrix |
 | `main_full` | full cleaned ULB (283,726; train 198,608) | all five on the same full training set | 10, 20, 50 | 5 | Full-data comparison; SMO/CVXPY may fail |
 | `main_capped` | common 10k subset | all five on the same 10k | 10, 20, 50 | 3 | Fair all-method fallback if full SMO/CVXPY fail |
+| `predictive` | common 10k subset | all five on the same 10k | 10, 20, 50 | 3 | Validation-tuned `C`; predictive/operational metrics only |
 | `cost_sweep` | 50k subset | Pegasos, ADMM, PA-ADMM | 1, 3, 5, 10, 20, 50; **evaluated at fixed 20:1** | 1 | How training-weight asymmetry changes a common-cost deployment metric |
 | `ablation` | full data | PA-ADMM variants | 20:1 | 3 | `K ∈ {0,5,10,20}`; adaptive ρ on/off; `alpha ∈ {1.0,1.5,1.8}`; `rho0 ∈ {0.1,1,10}` |
 | `stress_imbalance` | training prevalence adjusted to 0.1/0.5/1/5/10% (positive or negative subsampling, recorded) | Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Extreme-imbalance behaviour |
@@ -266,8 +267,19 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
   compared against each other on the same full data.
 - `main_capped` is the fair all-five fallback on a common 10k training subset; use it when
   SMO/CVXPY cannot complete the full-data matrix.
+- **Fixed-QP rule for solver ranking.** `main_fast`, `main_full`, and `main_capped` fix
+  `C_grid: [1.0]` for every method, so `objective`, `relative_gap`, and `time_to_tolerance`
+  compare the same optimization problem. Validation-only threshold selection remains.
+  `configs/predictive.yaml` tunes `C` per method for cost/PR-AUC/recall comparisons; its
+  objective-based metrics are grouped by the selected `C` and are not a solver ranking.
 - ADMM/PA-ADMM full data is feasible because `d = 29` (V1–V28 + Amount; Time is not a feature)
   and the linear system is 30×30. Pegasos is O(d) per iteration.
+- **ADMM rho protocol (decided by preflight).** On the common 50k split, fixed `rho0=1` hit the
+  10k iteration cap without convergence, while `adaptive_rho=true` converged near the optimum in
+  about 8.5k iterations. The main configs therefore run `admm` with `rho0=1`,
+  `adaptive_rho=true`, `alpha=1`, `max_iter=20000`; the fixed-rho cold baseline remains the
+  `admm-cold` variant in the ablation. Report `converged`/gap and never present an unconverged
+  fit as a converged speed record.
 - Per-fit time budget and hard timeout are both **5400 s (90 minutes)**. Timeout/OOM is recorded
   as a failure; do not drop it silently. Solver C-grid tuning is included in
   `tuning_fit_time_sec`, separate from the selected fit's `fit_time_sec`.
@@ -286,7 +298,10 @@ the main "faster" claim.
 A run needs at least two aligned objective/timestamp points for a non-null time-to-tolerance;
 single-checkpoint solvers (e.g. an interior-point solve reported as one final point) get
 `time_to_tolerance = null`. A comparison group needs at least two successful methods; a
-single successful run never uses itself as its own reference.
+single successful run never uses itself as its own reference. The group key includes the
+**selected `C`**: changing `C` changes the QP, so runs with different selected `C` are never
+compared on objective, relative gap, or time-to-tolerance. `main_fast`, `main_full`, and
+`main_capped` fix `C=1` so all methods share one QP.
 
 ### 6.2 Secondary metrics
 
@@ -303,8 +318,9 @@ single successful run never uses itself as its own reference.
 ### 6.3 Reference objective
 
 - Correctness runs: CVXPY/LIBSVM reference.
-- Full-data runs: the best observed training objective among the methods on the same split and
-  the same training rows. Groups with only one successful method get no time-to-tolerance.
+- Full-data runs: the best observed training objective among the methods on the same split,
+  the same training rows, and the **same selected `C`**. Groups with only one successful method
+  at that `C` get no time-to-tolerance.
 - Store `reference_objective` in every JSON so the gap is reproducible.
 - Never use test data to choose the reference or the threshold.
 - Split files are validated against the raw CSV SHA-256, cleaned row count, and positive count
@@ -313,7 +329,12 @@ single successful run never uses itself as its own reference.
 ### 6.4 Threshold and tuning
 
 - Select the decision threshold on **validation** to minimize validation cost.
-- Select base `C` on validation cost from `{0.01, 0.1, 1, 10, 100}`.
+- Solver-ranking runs (`correctness`, `main_fast`, `main_full`, `main_capped`, `ablation`,
+  `scaling`): fix `C=1` so every method solves the same QP.
+- Predictive runs (`configs/predictive.yaml`): select base `C` on validation cost from
+  `{0.01, 0.1, 1, 10, 100}`; report cost/PR-AUC/recall, and do not compare objective-based
+  metrics across different selected `C`. The harness enforces this by including `C` in the
+  reference and pairwise-objective grouping keys.
 - Class weights are fixed by the cost ratio; normalize to mean one.
 - Until WP1's `src/costs.py` lands, the harness uses its documented sample-mean placeholder
   and records `costs_source` in every JSON. Reconcile the two normalizations before final runs.
@@ -322,7 +343,9 @@ single successful run never uses itself as its own reference.
 - SMO: linear kernel for the main matrix; an RBF run, if included, is a separate
   qualitative 10k check and is never mixed into the main full-data ranking.
 - Pegasos: `C` grid and learning-rate/epoch settings.
-- ADMM/PA-ADMM: `rho0`, `alpha`, adaptive ρ; PA-ADMM also `K`.
+- ADMM/PA-ADMM: main configs use adaptive ρ, `rho0=1`, `alpha=1` (ADMM) / `1.6`
+  (PA-ADMM), `max_iter=20000`; PA-ADMM also `K=10`. The fixed-rho control is the
+  `admm-cold` ablation variant.
 - No test-set tuning; no per-method early stopping on test.
 
 ### 6.5 Fairness controls
@@ -404,14 +427,20 @@ Additional audit fields in the implementation: `training_cost_ratio`, `evaluatio
 
 ### 7.3 Naming rules
 
-- Experiment IDs: `correctness`, `main_fast`, `main_full`, `cost_sweep`, `ablation`,
-  `stress_imbalance`, `stress_noise`, `temporal`, `scaling`.
+- Experiment IDs: `correctness`, `main_fast`, `main_full`, `main_capped`, `predictive`,
+  `cost_sweep`, `ablation`, `stress_imbalance`, `stress_noise`, `temporal`, `scaling`.
 - Method IDs: `smo`, `pegasos`, `admm`, `pa_admm`, `cvxpy`.
 - Dataset IDs: `ulb`, `synthetic`.
 - Cost ratio: integer `c_FN/c_FP` (`ratio-20`).
 - Seed: `seed-0`, no padding.
 - Runs are not overwritten by default (`overwrite: false`); every JSON stores a `config_hash`.
   For a deliberate rerun, use a fresh results directory or explicitly enable overwrite.
+- The main configs set `reuse_existing: true`. A successful existing run is reused only when
+  its dataset, rows/positives, ratios, C grid, hyperparameters, tolerance, budgets, costs
+  source, and split metadata match the current job; a mismatch raises instead of silently
+  reusing a different experiment. Existing failed runs are retried. `overwrite: true` forces
+  a full refit. This supports adding remaining methods to `main_full` without refitting
+  ADMM/PA-ADMM.
 
 ---
 
@@ -467,6 +496,9 @@ The whole project is done when:
   silently substitute a capped run into the full-data ranking.
 - **ADMM's dense solve:** `d = 29` makes the 30×30 system cheap; do not extrapolate to
   high-dimensional data without a sparse-aware variant.
+- **Fixed-rho ADMM is only the ablation control:** the main configs use adaptive rho and a
+  20k iteration ceiling after the 50k preflight; the `admm-cold` ablation keeps fixed rho=1.
+  Report `converged`/gap and never present an unconverged fit as a converged speed record.
 - **PA-ADMM may not win:** report the component ablation and the negative result. The
   cost-aware benchmark and regime map remain the contribution.
 - **Data leakage:** fit standardization, thresholds, and hyperparameters on training/validation
@@ -484,9 +516,14 @@ The whole project is done when:
 - [x] Add the proposal PDF under `docs/proposal/`.
 - [x] Implement WP4 data/metric utilities, reproducible split files, evaluation harness,
       configs, experiment entry points, and the solver contract/checker.
-- [ ] Implement `src/costs.py` (WP1) and the five solver modules (WP1–WP3).
-      Start with `docs/INTERFACES.md` and `experiments/check_solver.py`.
+- [ ] Implement `src/costs.py` (WP1) and the remaining solver modules (WP1–WP2);
+      WP3's `src/svm_admm.py` is merged. Start with `docs/INTERFACES.md` and
+      `experiments/check_solver.py`.
+- [x] ADMM preflight: main configs use adaptive rho with `max_iter=20000`; fixed-rho
+      remains the `admm-cold` ablation control.
 - [ ] Run `correctness` and `main_fast` (blocked on solver modules).
+- [ ] Run `predictive` for validation-tuned predictive metrics; keep it separate from the
+      fixed-C solver ranking.
 - [ ] Freeze configs and run `main_full`.
 - [ ] Produce final tables/figures; empty tables and "pending solver integration"
       placeholder figures are already committed, and no final numbers are fabricated.

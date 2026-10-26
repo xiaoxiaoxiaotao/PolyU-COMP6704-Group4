@@ -5,6 +5,7 @@ dataset: ulb
 methods: [pegasos, admm, pa_admm]
 seeds: [0]
 cost_ratios: [10]
+# Default tuning grid. Fixed-QP solver comparisons override this with [1.0].
 C_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
 tolerance: 0.0001
 time_budget_sec: 5400

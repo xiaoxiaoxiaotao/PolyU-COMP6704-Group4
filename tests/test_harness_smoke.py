@@ -108,6 +108,14 @@ class ToyHistorySVMAlt(ToyHistorySVM):
     scale = 2.0
 
 
+class CountingToySVM(ToyHistorySVM):
+    fit_calls = 0
+
+    def fit(self, *args: object, **kwargs: object) -> "CountingToySVM":
+        type(self).fit_calls += 1
+        return super().fit(*args, **kwargs)
+
+
 class FailingSVM:
     def fit(self, *args: object, **kwargs: object) -> None:
         raise RuntimeError("intentional fit failure")
@@ -446,3 +454,195 @@ def test_failed_fit_still_writes_a_failure_json(tmp_path) -> None:
     payload = json.loads(path.read_text())
     for field in REQUIRED_RUN_FIELDS:
         assert field in payload
+
+
+def _reference_record(*, method: str, C: float, objective: float) -> dict:
+    return {
+        "experiment": "C_reference_test",
+        "dataset": "synthetic",
+        "method": method,
+        "variant": None,
+        "seed": 0,
+        "cost_ratio": 20,
+        "evaluation_cost_ratio": 20,
+        "n_train": 100,
+        "C": C,
+        "tolerance": 1e-3,
+        "objective": objective,
+        "objective_history": [objective + 1.0, objective],
+        "time_history": [0.1, 0.2],
+        "history_points": 2,
+        "history_consistent": True,
+        "status": "ok",
+    }
+
+
+def test_reference_requires_the_same_selected_C(tmp_path) -> None:
+    records = [
+        _reference_record(method="a", C=1.0, objective=10.0),
+        _reference_record(method="b", C=10.0, objective=20.0),
+    ]
+    _assign_reference_objectives(
+        records,
+        {"reference_method": None},
+        tmp_path,
+        logger=None,
+    )
+    for record in records:
+        assert record["reference_objective"] is None
+        assert record["time_to_tolerance_sec"] is None
+        assert record["tolerance_note"] == "insufficient_comparable_runs"
+
+    same_c_records = [
+        _reference_record(method="a", C=1.0, objective=10.0),
+        _reference_record(method="b", C=1.0, objective=20.0),
+    ]
+    _assign_reference_objectives(
+        same_c_records,
+        {"reference_method": None},
+        tmp_path,
+        logger=None,
+    )
+    assert same_c_records[0]["reference_objective"] == pytest.approx(10.0)
+    assert same_c_records[1]["reference_objective"] == pytest.approx(10.0)
+    assert same_c_records[1]["relative_gap"] > 0
+
+
+def test_pairwise_objective_requires_the_same_selected_C() -> None:
+    frame = pd.DataFrame(
+        {
+            "dataset": ["d"] * 4,
+            "method": ["a", "a", "b", "b"],
+            "variant": ["base"] * 4,
+            "seed": [0, 1, 0, 1],
+            "cost_ratio": [10] * 4,
+            "evaluation_cost_ratio": [10] * 4,
+            "n_train": [100] * 4,
+            "C": [1.0, 1.0, 10.0, 10.0],
+            "objective": [1.0, 2.0, 3.0, 4.0],
+            "cost_per_example": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+    table = pairwise_wilcoxon_tests(
+        frame,
+        metrics=("objective", "cost_per_example"),
+    )
+    assert table[table["metric"] == "objective"].empty
+    cost_rows = table[table["metric"] == "cost_per_example"]
+    assert len(cost_rows) == 1
+    assert cost_rows.iloc[0]["n_pairs"] == 2
+
+    frame["C"] = 1.0
+    table = pairwise_wilcoxon_tests(frame, metrics=("objective",))
+    assert len(table) == 1
+    assert table.iloc[0]["C"] == 1.0
+    assert table.iloc[0]["n_pairs"] == 2
+
+
+def test_aggregate_groups_objective_metrics_by_selected_C(tmp_path) -> None:
+    raw_dir = tmp_path / "raw" / "C_aggregate_test" / "m"
+    raw_dir.mkdir(parents=True)
+    for seed, (C, objective, cost) in enumerate(
+        [(1.0, 10.0, 0.1), (10.0, 20.0, 0.2)]
+    ):
+        record = {
+            "experiment": "C_aggregate_test",
+            "dataset": "synthetic",
+            "method": "m",
+            "variant": "base",
+            "seed": seed,
+            "cost_ratio": 10,
+            "evaluation_cost_ratio": 10,
+            "n_train": 100,
+            "C": C,
+            "status": "ok",
+            "objective": objective,
+            "cost_per_example": cost,
+        }
+        (raw_dir / f"seed-{seed}.json").write_text(json.dumps(record))
+
+    summary = aggregate_runs(tmp_path, "C_aggregate_test", logger=None)
+    objective_rows = summary[summary["metric"] == "objective"]
+    assert len(objective_rows) == 2
+    assert set(objective_rows["C"]) == {1.0, 10.0}
+    cost_rows = summary[summary["metric"] == "cost_per_example"]
+    assert len(cost_rows) == 1
+    assert pd.isna(cost_rows.iloc[0]["C"])
+
+
+def _reuse_test_config(tmp_path, method_kwargs=None) -> dict:
+    return {
+        "experiment": "reuse_test",
+        "dataset": "synthetic",
+        "methods": ["toy"],
+        "seeds": [0],
+        "cost_ratios": [10],
+        "C_grid": [1.0],
+        "tolerance": 1e-6,
+        "time_budget_sec": 30,
+        "reference_method": None,
+        "reuse_existing": True,
+        "data": {
+            "source": "synthetic",
+            "synthetic_n_list": [400],
+            "synthetic_d": 5,
+            "synthetic_fraud_rate": 0.10,
+            "synthetic_separation": 2.5,
+            "standardize_amount": False,
+        },
+        "method_kwargs": method_kwargs or {},
+        "data_variants": [],
+        "method_variants": [],
+        "paths": {"results_dir": str(tmp_path)},
+        "logging": {"level": "WARNING"},
+        "aggregate": True,
+        "history_max_points": 100,
+        "overwrite": False,
+    }
+
+
+def test_run_experiment_reuses_matching_successful_runs(tmp_path) -> None:
+    config = _reuse_test_config(tmp_path)
+    registry = {"toy": CountingToySVM}
+    logger = get_logger("test_reuse", level=logging.WARNING)
+    CountingToySVM.fit_calls = 0
+
+    first = run_experiment(config, method_registry_extra=registry, logger=logger)
+    assert first[0]["status"] == "ok"
+    assert CountingToySVM.fit_calls == 1
+
+    second = run_experiment(config, method_registry_extra=registry, logger=logger)
+    assert second[0]["status"] == "ok"
+    assert second[0]["reused"] is True
+    assert CountingToySVM.fit_calls == 1
+
+    mismatch = json.loads(json.dumps(config))
+    mismatch["method_kwargs"] = {"toy": {"unexpected": 1}}
+    with pytest.raises(RuntimeError, match="cannot be reused"):
+        run_experiment(
+            mismatch,
+            method_registry_extra=registry,
+            logger=logger,
+        )
+
+
+def test_run_experiment_retries_existing_failed_runs(tmp_path) -> None:
+    config = _reuse_test_config(tmp_path)
+    logger = get_logger("test_reuse_failed", level=logging.WARNING)
+
+    first = run_experiment(
+        config,
+        method_registry_extra={"toy": FailingSVM},
+        logger=logger,
+    )
+    assert first[0]["status"] == "failed"
+
+    CountingToySVM.fit_calls = 0
+    second = run_experiment(
+        config,
+        method_registry_extra={"toy": CountingToySVM},
+        logger=logger,
+    )
+    assert second[0]["status"] == "ok"
+    assert not second[0].get("reused", False)
+    assert CountingToySVM.fit_calls == 1
