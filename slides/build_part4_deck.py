@@ -16,6 +16,7 @@ import argparse
 import csv
 import glob
 import json
+import math
 import os
 import statistics as st
 from pathlib import Path
@@ -95,6 +96,7 @@ def summarize(runs: list[dict]) -> dict:
                 "ttol": st.median(ttol) if ttol else float("nan"),
                 "ttol_hits": len(ttol),
                 "fit": st.mean([g["fit_time_sec"] for g in group]),
+                "fit_med": st.median([g["fit_time_sec"] for g in group]),
                 "pr_auc": st.mean([g["pr_auc"] for g in group]),
                 "pr_auc_sd": st.pstdev([g["pr_auc"] for g in group]) if len(group) > 1 else 0.0,
                 "recall_1": st.mean([g["recall_at_fpr_0.01"] for g in group]),
@@ -427,12 +429,14 @@ def fig_scale_ladder(runs_by_experiment: dict[str, list[dict]], path: Path) -> P
 
 
 def chrome(slide, kicker: str, takeaway: str, source: str, page: str) -> None:
-    add_text(slide, 0.58, 1.11, 11.39, 0.24, kicker, size=10, bold=True, color=RED)
+    add_text(slide, 0.58, 1.11, 11.39, 0.24, kicker, size=10, bold=True, color=RED,
+             check=False)
     rule(slide, 0.58, 6.18, 0.028, 0.49, RED)
-    add_text(slide, 0.75, 6.22, 11.89, 0.46, takeaway, size=17, bold=True, color=RED)
+    add_text(slide, 0.75, 6.22, 11.89, 0.46, takeaway, size=17, bold=True, color=RED,
+             check=False)
     rule(slide, 0.58, 6.93, 12.17, 0.014, RGBColor(0xC9, 0xD2, 0xD9))
-    add_text(slide, 0.58, 7.05, 11.32, 0.24, source, size=9, color=GREY)
-    add_text(slide, 12.15, 7.02, 0.62, 0.3, page, size=10, color=GREY)
+    add_text(slide, 0.58, 7.05, 11.32, 0.24, source, size=9, color=GREY, check=False)
+    add_text(slide, 12.15, 7.02, 0.62, 0.3, page, size=10, color=GREY, check=False)
 
 
 def rule(slide, left, top, width, height, color) -> None:
@@ -444,8 +448,11 @@ def rule(slide, left, top, width, height, color) -> None:
     shape.shadow.inherit = False
 
 
+CONTENT_BOTTOM = 6.12  # inches; the takeaway band starts at 6.22
+
+
 def add_text(slide, left, top, width, height, text, *, size=14, bold=False,
-             color=DARK, align=PP_ALIGN.LEFT):
+             color=DARK, align=PP_ALIGN.LEFT, check=True):
     box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
     frame = box.text_frame
     frame.word_wrap = True
@@ -459,6 +466,14 @@ def add_text(slide, left, top, width, height, text, *, size=14, bold=False,
         run.font.bold = bold
         run.font.color.rgb = color
         run.font.name = FONT
+    # Cheap layout guard: Calibri at `size` fits roughly width*72/(size*0.5) chars
+    # per line, and each line needs about 1.35 * size points of height.
+    chars_per_line = max(8.0, width * 72.0 / (size * 0.5))
+    wrapped = sum(max(1, math.ceil(len(line) / chars_per_line)) for line in lines)
+    estimated_bottom = top + wrapped * size * 1.35 / 72.0
+    if check and estimated_bottom > CONTENT_BOTTOM:
+        print(f"[layout] overflow risk: {text[:46]!r} ends near "
+              f"{estimated_bottom:.2f}in (limit {CONTENT_BOTTOM}in)")
     return box
 
 
@@ -847,12 +862,52 @@ def main() -> None:
               "time-to-tolerance are not significant at 5 seeds, the reliable signal is "
               "convergence certification, especially at 50:1.")
 
+    # 7b - Full-data grid
+    grid_rows = []
+    for ratio in RATIOS:
+        for method in methods_full:
+            value = summary_full.get((method, ratio))
+            if not value:
+                continue
+            grid_rows.append([
+                METHOD_LABELS.get(method, method), f"{ratio:g}:1",
+                f"{value['converged']}/{value['n']}",
+                fmt(value["ttol"], "{:.0f}"), fmt(value["fit_med"], "{:.0f}"),
+                fmt(value["objective"], "{:.1f}"),
+                f"{fmt(value['pr_auc'])} ± {fmt(value['pr_auc_sd'])}",
+                fmt(value["cost"], "{:.5f}"),
+            ])
+    grid_height = 0.32 * (len(grid_rows) + 1) + 0.2
+    slide = content_slide(prs, body_layout, "Full data at a glance")
+    chrome(slide, "PART IV  /  MAIN RESULTS · GRID",
+           "Every cell is the same QP on the same 198,608 training rows",
+           "results/raw/main_full · 42,559 test rows with 71 frauds · C = 1 · tolerance 1e-3",
+           "IV · 08")
+    if grid_rows:
+        add_table(slide, 0.58, 1.68, 11.5, grid_height,
+                  ["solver", "ratio", "certified", "median t-to-tol (s)",
+                   "median fit (s)", "objective", "PR-AUC", "cost / example"],
+                  grid_rows, font_size=11,
+                  column_widths=[1.5, 0.8, 1.1, 1.7, 1.4, 1.3, 1.9, 1.5])
+        add_text(slide, 0.58, 1.68 + grid_height + 0.15, 11.6, 0.8,
+                 "t-to-tol = median over the 5 seeds of the first checkpoint within 0.1% of "
+                 "that group's best observed objective; certified = the solver's own stopping "
+                 "certificate; PR-AUC ± sd is the seed spread.",
+                 size=12, color=GREY)
+    else:
+        add_text(slide, 0.58, 1.9, 11.6, 1.0,
+                 "No full-data runs recorded yet.", size=14, color=GREY)
+    set_notes(slide,
+              "~40s: this is the table the audience should photograph. Point at one column "
+              "(say 20:1) and compare across solvers: the objective and PR-AUC agree, the "
+              "certified count and the wall time are where they differ.")
+
     # 8 - Performance
     slide = content_slide(prs, body_layout, "Performance under the deployment cost model")
     chrome(slide, "PART IV  /  MAIN RESULTS · QUALITY",
            "Detection quality is set by the data, not by which solver you pick",
            "results/tables/main_full_pr_auc.csv · recall_at_fpr · cost_per_example",
-           "IV · 08")
+           "IV · 09")
     add_picture(slide, figures / "p4_performance.png", 0.55, 1.62, 11.6)
     perf_method = "pa_admm" if ("pa_admm", 20.0) in summary_full else (
         methods_full[0] if methods_full else None)
@@ -877,7 +932,7 @@ def main() -> None:
     chrome(slide, "PART IV  /  FINDINGS",
            "Claim reliability and cost-aware ranking; do not claim a speed winner yet",
            "results/tables/main_full_wilcoxon.csv · EXPERIMENTS.md §10",
-           "IV · 09")
+           "IV · 10")
     admm_hard = hard_regime.get("admm", {})
     pa_hard = hard_regime.get("pa_admm", {})
     fits_recorded = sum(len(runs[name]) for name in runs)

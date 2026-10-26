@@ -9,11 +9,25 @@ C_grid: [1.0]
 tolerance: 0.0001
 time_budget_sec: 5400
 reference_method: cvxpy
+# Same ADMM/PA-ADMM configuration as the main ladder, so the agreement check
+# compares converged models. The fixed-rho cold control is the admm-cold
+# variant in configs/ablation.yaml.
+method_kwargs:
+  admm:
+    rho0: 1.0
+    adaptive_rho: true
+    alpha: 1.0
+    max_iter: 20000
+  pa_admm:
+    max_iter: 20000
 data:
   subset_n: 10000
   subset_seed: 0
   split_protocol: stratified
   use_saved_splits: false
 notes: >-
-  Fixed C=1 and ratio 10:1. LIBSVM comparison is pending WP2; no external
-  LIBSVM result is fabricated here.
+  Fixed C=1 and ratio 10:1 on 7,000 training rows. WP2 verifies SMO against
+  LIBSVM with its own runner (results/member2, not committed) and WP3 verifies
+  ADMM against CVXPY/ECOS; this experiment checks that the registered solvers
+  agree on the harness's own objective convention. No external result is
+  fabricated here.
