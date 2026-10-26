@@ -1,0 +1,23 @@
+# Member 2 correctness experiment, using the SAME construction as main_capped.
+# n=10000 is TOTAL subset size: 7000 train / 1500 validation / 1500 test.
+# Fixed C and kernel within each SMO-LIBSVM pair make objectives comparable.
+# 9 linear pairs + 1 separate RBF pair. Run only after budget approval.
+dataset: ulb
+n: 10000
+subset_seed: 0
+seeds: [0, 1, 2]
+ratios: [10, 20, 50]
+kernels: [linear]
+extra_cases:
+  - {kernel: rbf, ratio: 10, seed: 0}
+C: 1.0
+gamma: scale
+tol: 0.0001
+per_fit_sec: 60
+hard_timeout_sec: 65
+global_sec: 1800
+max_iter: 100000
+cache_size_mb: 64
+log_every: 25
+raw_path: data/raw/creditcard.csv
+output: results/member2
