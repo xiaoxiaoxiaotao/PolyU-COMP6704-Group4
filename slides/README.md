@@ -5,8 +5,14 @@
 ```bash
 .venv/bin/python slides/build_part4_deck.py \
     --template /path/to/6704-Group4.pptx \
-    --out slides/COMP6704_Group4_PART_IV.pptx
+    --out slides/COMP6704_Group4_PART_IV.pptx \
+    --check
 ```
+
+`--check` audits every PART IV shape: nothing may leave the 13.33 × 7.5 in canvas
+and no two content boxes (text, picture, table) may overlap. It exits non-zero
+when a slide needs attention, and the builder separately warns when a text box is
+tall enough to run into the takeaway band.
 
 The builder reads `results/raw/<experiment>/**/seed-*.json` and
 `results/tables/*.csv`, writes the deck figures to `results/figures/deck/`, and

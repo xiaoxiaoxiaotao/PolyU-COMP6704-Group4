@@ -591,11 +591,56 @@ def fmt(value, pattern="{:.2f}") -> str:
         return "n/a"
 
 
+def audit_layout(prs, first_new_slide: int) -> list[str]:
+    """Report shapes that leave the slide or collide with another content box."""
+    problems: list[str] = []
+    limit_w = prs.slide_width / 914400
+    limit_h = prs.slide_height / 914400
+    for number, slide in enumerate(prs.slides, start=1):
+        if number < first_new_slide:
+            continue
+        boxes = []
+        for shape in slide.shapes:
+            if shape.left is None or shape.top is None:
+                continue
+            left, top = shape.left / 914400, shape.top / 914400
+            right = left + (shape.width or 0) / 914400
+            bottom = top + (shape.height or 0) / 914400
+            if right > limit_w + 0.02 or bottom > limit_h + 0.02 or left < -0.02 or top < -0.02:
+                problems.append(
+                    f"slide {number}: {shape.shape_type} '{shape.name}' leaves the canvas "
+                    f"({left:.2f},{top:.2f})-({right:.2f},{bottom:.2f})")
+            has_content = (
+                (shape.has_text_frame and shape.text_frame.text.strip())
+                or shape.shape_type == 13
+                or getattr(shape, "has_table", False)
+            )
+            if has_content:
+                boxes.append((left, top, right, bottom, str(shape.shape_type),
+                              (shape.text_frame.text[:24] if shape.has_text_frame
+                               else shape.shape_type.name)))
+        for a in range(len(boxes)):
+            for b in range(a + 1, len(boxes)):
+                ax1, ay1, ax2, ay2, atype, alabel = boxes[a]
+                bx1, by1, bx2, by2, btype, _ = boxes[b]
+                if atype == btype == "PLACEHOLDER (14)":
+                    continue
+                overlap_w = min(ax2, bx2) - max(ax1, bx1)
+                overlap_h = min(ay2, by2) - max(ay1, by1)
+                if overlap_w > 0.12 and overlap_h > 0.12:
+                    problems.append(
+                        f"slide {number}: {atype} {alabel!r} overlaps {btype} at "
+                        f"{overlap_w:.2f}x{overlap_h:.2f}in")
+    return problems
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--template", required=True)
     parser.add_argument("--out", default="slides/COMP6704_Group4_PART_IV.pptx")
     parser.add_argument("--results", default="results")
+    parser.add_argument("--check", action="store_true",
+                        help="audit PART IV geometry and exit non-zero on problems")
     args = parser.parse_args()
 
     root = Path(args.results)
@@ -685,6 +730,7 @@ def main() -> None:
     if pending:
         coverage_note += f" · pending: {', '.join(METHOD_LABELS.get(p, p) for p in pending)}"
 
+    first_new_slide = len(prs.slides) + 1
     slide = divider(prs, divider_layout, "Evaluation, Experiments and Results",
                     "PART IV\nEVALUATION AND BENCHMARK")
     set_notes(slide,
@@ -978,6 +1024,14 @@ def main() -> None:
     print(f"Figures: {figures}")
     if pending:
         print(f"Pending methods (not run yet): {', '.join(pending)}")
+    if args.check:
+        problems = audit_layout(Presentation(str(output)), first_new_slide)
+        for problem in problems:
+            print(f"[layout] {problem}")
+        print(f"Layout audit: {len(problems)} problem(s) across "
+              f"{len(prs.slides) - first_new_slide + 1} PART IV slides")
+        if problems:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
