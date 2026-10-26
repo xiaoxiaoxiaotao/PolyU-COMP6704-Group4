@@ -116,6 +116,27 @@ class CountingToySVM(ToyHistorySVM):
         return super().fit(*args, **kwargs)
 
 
+class ToyRBFKernelSVM:
+    """Nonlinear stand-in: no w, so the canonical linear objective is undefined."""
+
+    def fit(self, X, y, C_per_sample, **kwargs: object) -> "ToyRBFKernelSVM":
+        self.kernel = "rbf"
+        self.gamma_ = 0.1
+        self.b = 0.0
+        self.n_iter = 3
+        self.converged = True
+        self.objective = 9.0
+        self.objective_history = [18.0, 9.0]
+        self.time_history = [0.1, 0.2]
+        return self
+
+    def decision_function(self, X: np.ndarray) -> np.ndarray:
+        return np.linspace(-1.0, 1.0, int(np.asarray(X).shape[0]), dtype=np.float64)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return np.where(self.decision_function(X) >= 0.0, 1, -1).astype(np.int8)
+
+
 class FailingSVM:
     def fit(self, *args: object, **kwargs: object) -> None:
         raise RuntimeError("intentional fit failure")
@@ -646,3 +667,35 @@ def test_run_experiment_retries_existing_failed_runs(tmp_path) -> None:
     assert second[0]["status"] == "ok"
     assert not second[0].get("reused", False)
     assert CountingToySVM.fit_calls == 1
+
+
+def test_nonlinear_runs_are_excluded_from_objective_comparison(tmp_path) -> None:
+    config = _reuse_test_config(tmp_path)
+    config["experiment"] = "family_test"
+    config["methods"] = ["toy", "toy_rbf"]
+    results = run_experiment(
+        config,
+        method_registry_extra={
+            "toy": ToyHistorySVM,
+            "toy_rbf": ToyRBFKernelSVM,
+        },
+        logger=get_logger("test_family", level=logging.WARNING),
+    )
+    by_method = {record["method"]: record for record in results}
+
+    nonlinear = by_method["toy_rbf"]
+    assert nonlinear["status"] == "ok"
+    assert nonlinear["objective_recomputable"] is False
+    assert nonlinear["kernel"] == "rbf"
+    assert nonlinear["gamma"] == pytest.approx(0.1)
+    assert nonlinear["reference_objective"] is None
+    assert nonlinear["time_to_tolerance_sec"] is None
+    assert (
+        nonlinear["tolerance_note"] == "objective_not_recomputable_from_w_and_b"
+    )
+    assert nonlinear["pr_auc"] is not None
+
+    linear = by_method["toy"]
+    assert linear["objective_recomputable"] is True
+    assert linear["reference_objective"] is None
+    assert linear["tolerance_note"] == "insufficient_comparable_runs"

@@ -236,6 +236,7 @@ class BinarySVM:
 | `run_stress.py` | Fraud-rate, label-noise and chronological stress tests |
 | `run_scaling.py` | Synthetic `n = 10k–200k`, `d = 20` |
 | `check_solver.py` | Contract check for one solver on synthetic data (WP2/WP3 handoff) |
+| `run_member2.py` | WP2's standalone SMO-vs-LIBSVM numerical cross-check. It writes to `results/member2/` (ignored) and is **not** part of the unified matrix; the official SMO results come from `run_correctness.py` / `run_main.py` through the registry, on the same rows and protocol as every other method. |
 
 Configs under `configs/` are optional but recommended: keep all paths, seeds, cost ratios,
 grids, tolerances and time budgets in YAML rather than hard-coding them.
@@ -326,6 +327,9 @@ compared on objective, relative gap, or time-to-tolerance. `main_fast`, `main_fu
   the same training rows, and the **same selected `C`**. Groups with only one successful method
   at that `C` get no time-to-tolerance.
 - Store `reference_objective` in every JSON so the gap is reproducible.
+- Only runs whose canonical objective the harness can recompute from `w,b` join a reference
+  group; nonlinear models keep their predictive metrics but get
+  `tolerance_note: objective_not_recomputable_from_w_and_b` instead of a gap.
 - Never use test data to choose the reference or the threshold.
 - Split files are validated against the raw CSV SHA-256, cleaned row count, and positive count
   before use.
@@ -345,7 +349,10 @@ compared on objective, relative gap, or time-to-tolerance. `main_fast`, `main_fu
 - Training weights and deployment cost are separate: `cost_sweep` trains at each ratio but
   selects thresholds and reports test cost at the common `evaluation_cost_ratio: 20`.
 - SMO: linear kernel for the main matrix; an RBF run, if included, is a separate
-  qualitative 10k check and is never mixed into the main full-data ranking.
+  qualitative 10k check and is never mixed into the main full-data ranking. The harness
+  enforces this: an objective that cannot be recomputed from `w,b` (nonlinear kernels have
+  no `w`) is marked `objective_recomputable: false`, keeps its predictive metrics, and is
+  excluded from reference, gap, time-to-tolerance, and objective-aggregation groups.
 - Pegasos: `C` grid and learning-rate/epoch settings.
 - ADMM/PA-ADMM: main configs use adaptive ρ, `rho0=1`, `alpha=1` (ADMM) / `1.6`
   (PA-ADMM), `max_iter=20000`; PA-ADMM also `K=10`. The fixed-rho control is the
@@ -422,7 +429,9 @@ train/validation/test rows.
 Additional audit fields in the implementation: `training_cost_ratio`, `evaluation_cost_ratio`,
 `config_hash`, `costs_source`, `hard_timeout_sec`, `history_points`,
 `time_to_tolerance_upper_bound`, `selection_incomplete`, `tuning_fit_time_sec`,
-`process_rss_peak_mb`, and `alphas_summary`/`rho_history` for the relevant solvers.
+`process_rss_peak_mb`, `objective_recomputable`, `kernel`, `gamma`, and
+`alphas_summary`/`rho_history` for the relevant solvers. Reused runs add `reused` and
+`reuse_config_hash`.
 `peak_memory_mb` is a per-fit sampled process-RSS delta, not a lifetime maximum.
 
 ### 7.2 Tables and figures

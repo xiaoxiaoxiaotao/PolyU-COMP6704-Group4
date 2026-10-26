@@ -59,7 +59,7 @@ TABLE_METRICS: dict[str, list[str]] = {
 
 TABLE_HEADER = (
     "dataset,method,variant,cost_ratio,evaluation_cost_ratio,n_train,C,"
-    "n,mean,std,ci_low,ci_high\n"
+    "objective_recomputable,n,mean,std,ci_low,ci_high\n"
 )
 
 

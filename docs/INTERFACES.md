@@ -184,7 +184,10 @@ where `J_ref` is CVXPY in correctness runs and the best observed canonical
 objective in the same `(dataset, ratio, eval ratio, seed, n_train, selected C)`
 group otherwise. The selected `C` is part of the grouping key because changing
 `C` defines a different QP; runs with different selected `C` are never compared
-on objective, relative gap, or time-to-tolerance. The main configs therefore
+on objective, relative gap, or time-to-tolerance. A run also has to expose a
+canonical objective the harness can recompute from `w,b`: a nonlinear model
+(no `w`) keeps its predictive metrics but is marked
+`objective_recomputable: false` and leaves the objective comparison entirely. The main configs therefore
 fix `C=1` across methods; `configs/predictive.yaml` tunes `C` per method and is
 used only for predictive metrics. Therefore:
 
@@ -442,7 +445,11 @@ PA-ADMM inherits or shares the ADMM loop and additionally sets
   LIBSVM correctness runner and config; see
   [`member2_handoff.md`](member2_handoff.md). Its standalone artifacts go to
   `results/member2/` and `work/`, both git-ignored, and it does not replace the
-  WP4 experiment matrix.
+  WP4 experiment matrix. For the team comparison, `smo` is loaded through the
+  registry like every other method, on the same rows, fixed `C=1`, and the same
+  budgets, so the ranking stays like-for-like. `run_member2.py` currently calls
+  the private `src.evaluate._build_ulb_data`; if that helper changes, WP4 must
+  update the runner or move it onto a public entry point.
 - Solver modules (`src/svm_pegasos.py`, `src/baseline_cvxpy.py`) and
   `src/costs.py` remain pending.
 - `run_correctness`/`run_main` will skip missing methods and write no fake

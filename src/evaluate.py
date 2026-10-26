@@ -558,6 +558,9 @@ def _base_record(
         "objective": None,
         "objective_reported": None,
         "objective_recomputed": None,
+        "objective_recomputable": None,
+        "kernel": None,
+        "gamma": None,
         "objective_consistency_rel_error": None,
         "history_final_consistency_rel_error": None,
         "history_consistent": None,
@@ -953,6 +956,18 @@ def run_one(
     objective = (
         objective_recomputed if objective_recomputed is not None else objective_reported
     )
+    # Without a recomputable canonical value (nonlinear kernels have no w), the
+    # reported objective belongs to a different model class and must not enter
+    # cross-method objective comparisons.
+    objective_recomputable = objective_recomputed is not None
+    kernel_value = get_attr(model, ("kernel",))
+    gamma_value = get_attr(model, ("gamma_", "gamma"))
+    if gamma_value is None:
+        gamma_record: Any = None
+    elif isinstance(gamma_value, (float, np.floating)):
+        gamma_record = float(gamma_value)
+    else:
+        gamma_record = str(gamma_value)
 
     objective_history, time_history = extract_history(model)
     history_final_error: float | None = None
@@ -1007,6 +1022,9 @@ def run_one(
             "objective": objective,
             "objective_reported": objective_reported,
             "objective_recomputed": objective_recomputed,
+            "objective_recomputable": objective_recomputable,
+            "kernel": None if kernel_value is None else str(kernel_value),
+            "gamma": gamma_record,
             "objective_consistency_rel_error": consistency_error,
             "history_final_consistency_rel_error": history_final_error,
             "history_consistent": history_consistent,
@@ -1429,6 +1447,21 @@ def _assign_reference_objectives(
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for record in results:
         if record.get("status") != "ok" or record.get("objective") is None:
+            continue
+        if record.get("objective_recomputable") is False:
+            record["reference_objective"] = None
+            record["relative_gap"] = None
+            record["time_to_tolerance_sec"] = None
+            record["reached_tolerance"] = False
+            record["tolerance_note"] = "objective_not_recomputable_from_w_and_b"
+            save_run(record, results_dir, overwrite=True)
+            if logger is not None:
+                logger.warning(
+                    "Excluded %s from objective comparison: its objective cannot be"
+                    " recomputed from w,b (kernel=%s); predictive metrics remain valid",
+                    record["method"],
+                    record.get("kernel"),
+                )
             continue
         key = (
             record["dataset"],
@@ -1907,9 +1940,11 @@ def pairwise_wilcoxon_tests(
         data["variant"].astype(str).isin(["base", "None", "nan"]),
         data["method"].astype(str) + ":" + data["variant"].astype(str),
     )
-    if "C" not in data.columns:
-        data["C"] = None
-    has_selected_C = bool(data["C"].notna().any())
+    comparability_fields = [
+        field
+        for field in ("C", "objective_recomputable")
+        if field in data.columns and data[field].notna().any()
+    ]
     group_keys = ["dataset", "cost_ratio", "evaluation_cost_ratio", "n_train"]
     for key in group_keys:
         if key not in data.columns:
@@ -1935,15 +1970,19 @@ def pairwise_wilcoxon_tests(
                     continue
                 metric_rows = merged
                 c_value: float | None = None
-                if metric in OBJECTIVE_DEPENDENT_METRICS and has_selected_C:
-                    c_a = pd.to_numeric(merged["C_a"], errors="coerce")
-                    c_b = pd.to_numeric(merged["C_b"], errors="coerce")
-                    metric_rows = merged[(c_a == c_b) & c_a.notna()]
+                if metric in OBJECTIVE_DEPENDENT_METRICS and comparability_fields:
+                    comparable = pd.Series(True, index=merged.index)
+                    for field in comparability_fields:
+                        left = merged[f"{field}_a"]
+                        right = merged[f"{field}_b"]
+                        comparable &= left.notna() & right.notna() & left.eq(right)
+                    metric_rows = merged[comparable]
                     if metric_rows.empty:
                         continue
-                    c_value = float(
-                        pd.to_numeric(metric_rows["C_a"], errors="coerce").iloc[0]
-                    )
+                    if "C" in comparability_fields:
+                        c_value = float(
+                            pd.to_numeric(metric_rows["C_a"], errors="coerce").iloc[0]
+                        )
                 pairs = metric_rows[[column_a, column_b]].apply(
                     pd.to_numeric, errors="coerce"
                 ).dropna()
@@ -2006,7 +2045,7 @@ def aggregate_runs(
         "evaluation_cost_ratio",
         "n_train",
     ]
-    objective_group_keys = base_group_keys + ["C"]
+    objective_group_keys = base_group_keys + ["C", "objective_recomputable"]
     for key in objective_group_keys:
         if key not in runs_frame.columns:
             runs_frame[key] = None
@@ -2034,6 +2073,7 @@ def aggregate_runs(
         for keys, group in successful_frame.groupby(group_keys, dropna=False):
             key_values = dict(zip(group_keys, keys))
             key_values.setdefault("C", None)
+            key_values.setdefault("objective_recomputable", None)
             values = pd.to_numeric(group[metric], errors="coerce").dropna().to_numpy()
             n_values = int(values.size)
             if n_values:
@@ -2050,6 +2090,7 @@ def aggregate_runs(
                 "evaluation_cost_ratio": key_values.get("evaluation_cost_ratio"),
                 "n_train": key_values.get("n_train"),
                 "C": key_values.get("C"),
+                "objective_recomputable": key_values.get("objective_recomputable"),
                 "n": n_values,
                 "mean": mean,
                 "std": std,
