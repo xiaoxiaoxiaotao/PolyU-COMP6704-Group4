@@ -1,23 +1,8 @@
 experiment,artifact,status,note
-correctness,correctness_objective.csv,pending solver integration,empty table; no fake numbers
-correctness,correctness_relative_gap.csv,pending solver integration,empty table; no fake numbers
-main_fast,main_fast_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
-main_fast,main_fast_cost_per_example.csv,pending solver integration,empty table; no fake numbers
-main_fast,main_fast_pr_auc.csv,pending solver integration,empty table; no fake numbers
-main_capped,main_capped_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
-main_capped,main_capped_cost_per_example.csv,pending solver integration,empty table; no fake numbers
-main_capped,main_capped_pr_auc.csv,pending solver integration,empty table; no fake numbers
 predictive,predictive_cost_per_example.csv,pending solver integration,empty table; no fake numbers
 predictive,predictive_pr_auc.csv,pending solver integration,empty table; no fake numbers
 predictive,predictive_recall_at_fpr_0.001.csv,pending solver integration,empty table; no fake numbers
 predictive,predictive_balanced_accuracy.csv,pending solver integration,empty table; no fake numbers
-main_full,main_full_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
-main_full,main_full_fit_time_sec.csv,pending solver integration,empty table; no fake numbers
-main_full,main_full_cost_per_example.csv,pending solver integration,empty table; no fake numbers
-main_full,main_full_pr_auc.csv,pending solver integration,empty table; no fake numbers
-main_full,main_full_recall_at_fpr_0.001.csv,pending solver integration,empty table; no fake numbers
-main_full,main_full_recall_at_fpr_0.01.csv,pending solver integration,empty table; no fake numbers
-main_full,main_full_balanced_accuracy.csv,pending solver integration,empty table; no fake numbers
 cost_sweep,cost_sweep_cost_per_example.csv,pending solver integration,empty table; no fake numbers
 cost_sweep,cost_sweep_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
 ablation,ablation_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers

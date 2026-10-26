@@ -19,6 +19,7 @@ import json
 import math
 import os
 import statistics as st
+from datetime import datetime
 from pathlib import Path
 
 for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
@@ -729,10 +730,18 @@ def main() -> None:
     coverage_note = f"methods with committed results: {coverage}"
     if pending:
         coverage_note += f" · pending: {', '.join(METHOD_LABELS.get(p, p) for p in pending)}"
+    fits_recorded = sum(len(runs[name]) for name in runs)
+    generated_stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     first_new_slide = len(prs.slides) + 1
     slide = divider(prs, divider_layout, "Evaluation, Experiments and Results",
                     "PART IV\nEVALUATION AND BENCHMARK")
+    add_text(slide, 0.37, 6.35, 11.6, 0.6,
+             f"Generated {generated_stamp} from {fits_recorded} recorded fits · "
+             f"results shown for {coverage}"
+             + (f" · still pending: {', '.join(METHOD_LABELS.get(p, p) for p in pending)}"
+                if pending else ""),
+             size=12, color=WHITE, check=False)
     set_notes(slide,
               "Opening (15s): Parts I-III defined the cost-sensitive objective and the four "
               "solvers. My part is the measurement: what data we used, how we made the "
@@ -890,6 +899,7 @@ def main() -> None:
     hard_bits = ", ".join(
         f"{METHOD_LABELS.get(method, method)} {value['converged']}/{value['n']}"
         for method, value in sorted(hard_regime.items())
+        if value
     )
     cap_note = (f" SMO exhausted its own 100,000-update limit on {smo_capped} of "
                 f"{len(smo_runs)} full-data fits, so its 'not converged' flag is an "
@@ -981,7 +991,6 @@ def main() -> None:
            "IV · 10")
     admm_hard = hard_regime.get("admm", {})
     pa_hard = hard_regime.get("pa_admm", {})
-    fits_recorded = sum(len(runs[name]) for name in runs)
     numbers = [
         ("01", "Objective values agree across solvers",
          (f"At fixed C=1 the certified solvers agree to {correctness_spread:.1e} on the same QP, "
