@@ -703,8 +703,19 @@ def main() -> None:
     admm_20, pa_20 = entry("admm", 20.0), entry("pa_admm", 20.0)
     warm_start_cost = (pa_20.get("fit", float("nan")) - admm_20.get("fit", float("nan"))
                        if admm_20 and pa_20 else float("nan"))
-    smo_runs = [r for r in full if r["method"] == "smo" and r["status"] == "ok"]
-    smo_capped = sum(int(r["n_iter"] or 0) >= 100000 for r in smo_runs)
+    def capped_stats(source: list[dict]) -> dict:
+        group = [r for r in source if r["method"] == "smo" and r["status"] == "ok"]
+        if not group:
+            return {}
+        return {
+            "n": len(group),
+            "capped": sum(int(r["n_iter"] or 0) >= 100000 for r in group),
+            "fit": st.median([r["fit_time_sec"] for r in group]),
+            "budget": st.median([r.get("time_budget_sec") or 5400.0 for r in group]),
+        }
+
+    smo_full = capped_stats(primary)
+    smo_fast = capped_stats(runs["main_fast"])
 
     # Is the between-solver difference smaller than the seed-to-seed noise?
     # A solver needs at least two seeds at a ratio before it may contribute to
@@ -967,10 +978,14 @@ def main() -> None:
         "certifies the most seeds there."
         if best_hard_method else ""
     )
-    cap_note = (f" SMO exhausted its own 100,000-update limit on {smo_capped} of "
-                f"{len(smo_runs)} full-data fits, so its 'not converged' flag is an "
-                f"iteration-cap result, not a wall-clock timeout."
-                if smo_runs else "")
+    cap_note = (
+        f" SMO exhausted its own 100,000-update limit on {smo_full['capped']} of "
+        f"{smo_full['n']} main_full fits after {smo_full['fit']:.0f}s of a "
+        f"{smo_full['budget']:.0f}s budget"
+        + (f" ({smo_fast['capped']}/{smo_fast['n']} already at 35k)" if smo_fast else "")
+        + ": that 'not converged' flag is an iteration-cap outcome, not a wall-clock timeout."
+        if smo_full else ""
+    )
     add_text(slide, 0.58, 4.45, 11.6, 1.5,
              "At 20:1 on the full data, median time-to-tolerance: " + ", ".join(ttol_bits) +
              ". Final fit time is dominated by iterating past the tolerance line until the "
@@ -1200,6 +1215,26 @@ def main() -> None:
                 f"{row.get('p_value')} |")
     else:
         summary_lines.append("No paired tests available yet.")
+    summary_lines += ["", "## Protocol caveats", ""]
+    if smo_full:
+        summary_lines.append(
+            f"- SMO stopped at its own 100,000-update cap on {smo_full['capped']}/"
+            f"{smo_full['n']} main_full fits after {smo_full['fit']:.0f}s of a "
+            f"{smo_full['budget']:.0f}s budget"
+            + (f" ({smo_fast['capped']}/{smo_fast['n']} at 35k)" if smo_fast else "")
+            + ". Raising that cap for a time-matched comparison is an open protocol "
+              "decision with WP2.")
+    unreferenced = sum(1 for record in primary
+                       if record["status"] == "ok"
+                       and record.get("reference_objective") is None)
+    if unreferenced:
+        summary_lines.append(
+            f"- {unreferenced} main_full record(s) have no reference objective yet: references "
+            "are assigned once the campaign finishes, so this summary is mid-run.")
+    if pending:
+        summary_lines.append(
+            f"- No results for {', '.join(METHOD_LABELS.get(p, p) for p in pending)}; the "
+            "ranking is not the final five-method comparison.")
     summary_lines += [
         "",
         f"Coverage on main_full:{coverage_suffix or ' complete'}",
