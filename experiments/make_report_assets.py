@@ -355,6 +355,13 @@ def plot_convergence(
         axis.plot(x_values, history, label=label)
         axis.set_xlabel(x_label)
     axis.set_ylabel("weighted objective")
+    # Cold starts and stochastic warm-start transients are orders of magnitude
+    # above the converged band, so a linear axis hides the whole comparison.
+    axis.set_yscale("log")
+    finals = [float(record["objective"]) for record in records if record.get("objective")]
+    if finals:
+        axis.axhline(min(finals), color="0.45", linestyle=":", linewidth=0.9,
+                     label="group best objective")
     axis.set_title(
         f"{experiment}: objective vs time (ratio {cost_ratio}, seed {seed})"
     )
