@@ -688,13 +688,53 @@ def main() -> None:
         return summary_full.get((method, ratio), {})
 
     hard_regime = {method: entry(method, 50.0) for method in methods_full}
-    best_hard = max((value for value in hard_regime.values() if value),
-                    key=lambda item: item.get("converged", -1), default={})
+    best_hard_method = max(
+        (method for method in methods_full if hard_regime.get(method)),
+        key=lambda method: hard_regime[method]["converged"]
+        / max(1, hard_regime[method]["n"]),
+        default=None,
+    )
+    best_hard = hard_regime.get(best_hard_method, {})
     admm_20, pa_20 = entry("admm", 20.0), entry("pa_admm", 20.0)
     warm_start_cost = (pa_20.get("fit", float("nan")) - admm_20.get("fit", float("nan"))
                        if admm_20 and pa_20 else float("nan"))
     smo_runs = [r for r in full if r["method"] == "smo" and r["status"] == "ok"]
     smo_capped = sum(int(r["n_iter"] or 0) >= 100000 for r in smo_runs)
+
+    # Is the between-solver difference smaller than the seed-to-seed noise?
+    # A solver needs at least two seeds at a ratio before it may contribute to
+    # this comparison, otherwise one lucky partition becomes a headline claim.
+    quality_gaps = []
+    for ratio in RATIOS:
+        present = [m for m in methods_full
+                   if (m, ratio) in summary_full and summary_full[(m, ratio)]["n"] >= 2]
+        if len(present) < 2:
+            continue
+        values = [summary_full[(m, ratio)]["pr_auc"] for m in present]
+        noise = st.mean([summary_full[(m, ratio)]["pr_auc_sd"] for m in present])
+        quality_gaps.append((max(values) - min(values), noise))
+    if quality_gaps:
+        worst_gap = max(gap for gap, _ in quality_gaps)
+        typical_noise = st.mean([noise for _, noise in quality_gaps])
+        quality_dominates = worst_gap <= typical_noise
+        quality_claim = (
+            f"The largest between-solver PR-AUC gap is {worst_gap:.3f} while the typical "
+            f"seed-to-seed sd is {typical_noise:.3f}, so the ranking is noise, not method "
+            "quality."
+            if quality_dominates else
+            f"A between-solver PR-AUC gap of {worst_gap:.3f} now exceeds the typical "
+            f"seed-to-seed sd of {typical_noise:.3f}; check it against the paired test "
+            "before attributing it to the solver."
+        )
+        quality_takeaway = (
+            "Detection quality is set by the data, not by which solver you pick"
+            if quality_dominates else
+            "Solver choice now separates on detection quality - check significance"
+        )
+    else:
+        quality_claim = ("Quality comparison is still provisional: no cost ratio has two "
+                         "solvers with at least two recorded seeds yet.")
+        quality_takeaway = "Quality comparison is provisional while seeds accumulate"
 
     data_note = {
         "raw_rows": 284807,
@@ -917,6 +957,11 @@ def main() -> None:
         for method, value in sorted(hard_regime.items())
         if value
     )
+    hardest_line = (
+        f" Pushing Cᵢ higher makes the QP stiffer; {METHOD_LABELS.get(best_hard_method, best_hard_method)} "
+        "certifies the most seeds there."
+        if best_hard_method else ""
+    )
     cap_note = (f" SMO exhausted its own 100,000-update limit on {smo_capped} of "
                 f"{len(smo_runs)} full-data fits, so its 'not converged' flag is an "
                 f"iteration-cap result, not a wall-clock timeout."
@@ -926,8 +971,7 @@ def main() -> None:
              ". Final fit time is dominated by iterating past the tolerance line until the "
              "solver's own certificate (KKT / residual + duality gap) is satisfied."
              f"\nRight panel counts certified seeds at the hardest ratio 50:1 → {hard_bits}."
-             " Pushing Cᵢ higher makes the QP stiffer; only the warm-started PA-ADMM still "
-             f"certifies most seeds there.{cap_note}",
+             f"{hardest_line}{cap_note}",
              size=12.5, color=GREY)
     set_notes(slide,
               "~55s: this is the solver-ranking slide. Be careful in wording: differences in "
@@ -977,22 +1021,19 @@ def main() -> None:
 
     # 8 - Performance
     slide = content_slide(prs, body_layout, "Performance under the deployment cost model")
-    chrome(slide, "PART IV  /  MAIN RESULTS · QUALITY",
-           "Detection quality is set by the data, not by which solver you pick",
+    chrome(slide, "PART IV  /  MAIN RESULTS · QUALITY", quality_takeaway,
            "results/tables/main_full_pr_auc.csv · recall_at_fpr · cost_per_example"
            + coverage_suffix,
            "IV · 09")
     add_picture(slide, figures / "p4_performance.png", 0.55, 1.62, 11.6)
     perf_method = "pa_admm" if ("pa_admm", 20.0) in summary_full else (
         methods_full[0] if methods_full else None)
-    entry = summary_full.get((perf_method, 20.0)) if perf_method else {}
+    perf_entry = summary_full.get((perf_method, 20.0)) if perf_method else {}
     add_text(slide, 0.58, 4.45, 11.6, 1.5,
              f"Full data, 20:1, {METHOD_LABELS.get(perf_method, perf_method)}: "
-             f"PR-AUC {fmt(entry.get('pr_auc'))}, "
-             f"recall at 1% FPR {fmt(100 * entry.get('recall_1', float('nan')), '{:.1f}')}%, "
-             f"cost {fmt(entry.get('cost'), '{:.5f}')} per example. Seed-to-seed spread "
-             f"(±{fmt(entry.get('pr_auc_sd'), '{:.3f}')} PR-AUC) is larger than any gap between "
-             "methods, and error bars overlap in every panel.\n"
+             f"PR-AUC {fmt(perf_entry.get('pr_auc'))}, "
+             f"recall at 1% FPR {fmt(100 * perf_entry.get('recall_1', float('nan')), '{:.1f}')}%, "
+             f"cost {fmt(perf_entry.get('cost'), '{:.5f}')} per example. {quality_claim}\n"
              "Test cost rises with the assumed fraud:legit ratio because the threshold is tuned "
              "for that ratio — that is a deployment choice, not a solver defect.",
              size=12.5, color=GREY)
