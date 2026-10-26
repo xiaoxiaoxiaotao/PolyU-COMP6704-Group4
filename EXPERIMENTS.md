@@ -237,6 +237,7 @@ class BinarySVM:
 | `run_scaling.py` | Synthetic `n = 10k–200k`, `d = 20` |
 | `check_solver.py` | Contract check for one solver on synthetic data (WP2/WP3 handoff) |
 | `finalize_results.py` | End-of-campaign one-shot: refresh `correctness`, re-aggregate every experiment, regenerate `results/tables` + `results/figures`, rebuild the generated PART IV deck with `--check`, and print a per-method completeness report |
+| `finalize_when_done.sh` | Background wrapper: waits for a running campaign to exit, runs `finalize_results.py`, and only then commits and pushes the refreshed tables/figures/deck (nothing is committed if finalizing fails) |
 | `run_member2.py` | WP2's standalone SMO-vs-LIBSVM numerical cross-check. It writes to `results/member2/` (ignored) and is **not** part of the unified matrix; the official SMO results come from `run_correctness.py` / `run_main.py` through the registry, on the same rows and protocol as every other method. |
 
 Configs under `configs/` are optional but recommended: keep all paths, seeds, cost ratios,
