@@ -26,6 +26,10 @@ results/logs/*
 # Temporary sklearn stand-in runs (not final results)
 results/preliminary/
 
+# Member 2 standalone SMO-LIBSVM correctness artifacts and subprocess scratch
+results/member2/
+work/
+
 # OS / editor
 .DS_Store
 Thumbs.db

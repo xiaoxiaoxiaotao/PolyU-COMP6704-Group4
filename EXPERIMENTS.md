@@ -265,7 +265,11 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 - `main_full` attempts all five methods on the full training set. SMO/CVXPY may time out or run
   out of memory; those runs are recorded as failures and are not ranked. Successful methods are
   compared against each other on the same full data.
-- `main_capped` is the fair all-five fallback on a common 10k training subset; use it when
+- **`data.subset_n` counts TOTAL rows before the 70/15/15 split.** `main_capped` and
+  `predictive` use `subset_n: 10000`, which is 7,000 training rows (12 frauds at
+  subset_seed 0/seed 0), not 10,000 training rows; `main_fast` uses 50,000 rows and
+  trains on 34,999.
+- `main_capped` is the fair all-five fallback on the common 10k-row subset; use it when
   SMO/CVXPY cannot complete the full-data matrix.
 - **Fixed-QP rule for solver ranking.** `main_fast`, `main_full`, and `main_capped` fix
   `C_grid: [1.0]` for every method, so `objective`, `relative_gap`, and `time_to_tolerance`
@@ -381,6 +385,10 @@ results/
 
 ### 7.1 JSON schema (one run)
 
+Schema illustration only; the numeric values are placeholders, not results. The
+real full-data protocol has `d = 29` (V1–V28 + Amount) and 198,608/42,559/42,559
+train/validation/test rows.
+
 ```json
 {
   "experiment": "main_full",
@@ -388,10 +396,10 @@ results/
   "method": "pa_admm",
   "cost_ratio": 20,
   "seed": 0,
-  "n_train": 199364,
-  "n_val": 42721,
-  "n_test": 42722,
-  "d": 30,
+  "n_train": 198608,
+  "n_val": 42559,
+  "n_test": 42559,
+  "d": 29,
   "C": 1.0,
   "hyperparams": {"K": 10, "rho0": 1.0, "alpha": 1.6, "adaptive_rho": true},
   "fit_time_sec": 42.1,
@@ -516,9 +524,9 @@ The whole project is done when:
 - [x] Add the proposal PDF under `docs/proposal/`.
 - [x] Implement WP4 data/metric utilities, reproducible split files, evaluation harness,
       configs, experiment entry points, and the solver contract/checker.
-- [ ] Implement `src/costs.py` (WP1) and the remaining solver modules (WP1–WP2);
-      WP3's `src/svm_admm.py` is merged. Start with `docs/INTERFACES.md` and
-      `experiments/check_solver.py`.
+- [ ] Implement `src/costs.py`, `src/svm_pegasos.py`, and `src/baseline_cvxpy.py`
+      (WP1). WP2's `src/svm_smo.py` and WP3's `src/svm_admm.py` are merged.
+      Start with `docs/INTERFACES.md` and `experiments/check_solver.py`.
 - [x] ADMM preflight: main configs use adaptive rho with `max_iter=20000`; fixed-rho
       remains the `admm-cold` ablation control.
 - [ ] Run `correctness` and `main_fast` (blocked on solver modules).

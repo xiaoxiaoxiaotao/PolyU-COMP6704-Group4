@@ -438,8 +438,13 @@ PA-ADMM inherits or shares the ADMM loop and additionally sets
   the registry contract and have independent numerical/integration tests.
   See [`WP3_ADMM.md`](WP3/WP3_ADMM.md) for derivation, diagnostic conventions,
   tests, and use with the common ablation runner.
-- Solver modules (`src/svm_smo.py`, `src/svm_pegasos.py`,
-  `src/baseline_cvxpy.py`) and `src/costs.py` remain pending.
+- WP2's `src/svm_smo.py` now provides `SMO` (linear and RBF) with its own
+  LIBSVM correctness runner and config; see
+  [`member2_handoff.md`](member2_handoff.md). Its standalone artifacts go to
+  `results/member2/` and `work/`, both git-ignored, and it does not replace the
+  WP4 experiment matrix.
+- Solver modules (`src/svm_pegasos.py`, `src/baseline_cvxpy.py`) and
+  `src/costs.py` remain pending.
 - `run_correctness`/`run_main` will skip missing methods and write no fake
   results. `check_solver.py` reports a clear missing-module error.
 - The committed split files must not be changed. If you believe a split bug

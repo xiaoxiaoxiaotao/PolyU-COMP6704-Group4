@@ -1,4 +1,5 @@
-# Validation-tuned predictive comparison on the common 10k subset.
+# Validation-tuned predictive comparison on the common 10k-row subset
+# (subset_n counts total rows: 7,000 train / 1,500 val / 1,500 test).
 # C is selected per method/seed by validation cost. Test cost, PR-AUC, recall,
 # and balanced accuracy are comparable across methods. Objective, relative gap,
 # and time-to-tolerance are grouped by the selected C, so runs that chose
