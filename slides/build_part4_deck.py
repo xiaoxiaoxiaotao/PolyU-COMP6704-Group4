@@ -884,11 +884,27 @@ def main() -> None:
               "are kept when data and hyper-parameters match, so adding a solver never refits "
               "the others.")
 
+    expected_full = len({int(r["seed"]) for r in primary}) * len(
+        {r["cost_ratio"] for r in primary}
+    ) or 15
+    full_coverage = ", ".join(
+        f"{METHOD_LABELS.get(method, method)} "
+        f"{len(cells(primary, method, None))}/{expected_full}"
+        for method in ("smo", "admm", "pa_admm")
+        if method in methods_full
+    )
+    coverage_suffix = (
+        f" · coverage {full_coverage}"
+        if any(len(cells(primary, method, None)) < expected_full for method in methods_full)
+        else ""
+    )
+
     # 7 - Speed / reliability
     slide = content_slide(prs, body_layout, "Main results: speed and certified convergence")
     chrome(slide, "PART IV  /  MAIN RESULTS · SPEED",
            "Reaching tolerance is minutes apart; certifying the optimum is where methods diverge",
-           "results/tables/main_full_*.csv · 5 seeds × 3 ratios · full data",
+           "results/tables/main_full_*.csv · 5 seeds × 3 ratios · full data"
+           + coverage_suffix,
            "IV · 07")
     add_picture(slide, figures / "p4_speed.png", 0.55, 1.62, 11.6)
     ttol_bits = []
@@ -937,7 +953,8 @@ def main() -> None:
     slide = content_slide(prs, body_layout, "Full data at a glance")
     chrome(slide, "PART IV  /  MAIN RESULTS · GRID",
            "Every cell is the same QP on the same 198,608 training rows",
-           "results/raw/main_full · 42,559 test rows with 71 frauds · C = 1 · tolerance 1e-3",
+           "results/raw/main_full · 42,559 test rows with 71 frauds · C = 1 · tolerance 1e-3"
+           + coverage_suffix,
            "IV · 08")
     if grid_rows:
         add_table(slide, 0.58, 1.68, 11.5, grid_height,
@@ -962,7 +979,8 @@ def main() -> None:
     slide = content_slide(prs, body_layout, "Performance under the deployment cost model")
     chrome(slide, "PART IV  /  MAIN RESULTS · QUALITY",
            "Detection quality is set by the data, not by which solver you pick",
-           "results/tables/main_full_pr_auc.csv · recall_at_fpr · cost_per_example",
+           "results/tables/main_full_pr_auc.csv · recall_at_fpr · cost_per_example"
+           + coverage_suffix,
            "IV · 09")
     add_picture(slide, figures / "p4_performance.png", 0.55, 1.62, 11.6)
     perf_method = "pa_admm" if ("pa_admm", 20.0) in summary_full else (
