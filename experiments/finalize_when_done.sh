@@ -44,7 +44,8 @@ if [ -n "${DESKTOP_COPY}" ]; then
     && echo "deck copied to ${DESKTOP_COPY}" >> "${LOG}"
 fi
 
-git add results/tables results/figures slides/COMP6704_Group4_PART_IV.pptx
+git add results/tables results/figures slides/COMP6704_Group4_PART_IV.pptx \
+  slides/PART_IV_SUMMARY.md slides/build_part4_deck.py
 git commit -m "results: finalize the main ladder and rebuild the PART IV slides" >> "${LOG}" 2>&1
 git push origin main >> "${LOG}" 2>&1
 echo "committed and pushed $(date -Is)" >> "${LOG}"
