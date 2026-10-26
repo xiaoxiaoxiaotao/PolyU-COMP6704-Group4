@@ -1,0 +1,4 @@
+-r requirements.txt
+# Optional dependencies for independent CVXPY/ECOS numerical reference checks.
+cvxpy>=1.6
+ecos>=2.0
