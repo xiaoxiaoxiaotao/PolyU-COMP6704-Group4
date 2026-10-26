@@ -7,6 +7,10 @@ main_fast,main_fast_pr_auc.csv,pending solver integration,empty table; no fake n
 main_capped,main_capped_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
 main_capped,main_capped_cost_per_example.csv,pending solver integration,empty table; no fake numbers
 main_capped,main_capped_pr_auc.csv,pending solver integration,empty table; no fake numbers
+predictive,predictive_cost_per_example.csv,pending solver integration,empty table; no fake numbers
+predictive,predictive_pr_auc.csv,pending solver integration,empty table; no fake numbers
+predictive,predictive_recall_at_fpr_0.001.csv,pending solver integration,empty table; no fake numbers
+predictive,predictive_balanced_accuracy.csv,pending solver integration,empty table; no fake numbers
 main_full,main_full_time_to_tolerance_sec.csv,pending solver integration,empty table; no fake numbers
 main_full,main_full_fit_time_sec.csv,pending solver integration,empty table; no fake numbers
 main_full,main_full_cost_per_example.csv,pending solver integration,empty table; no fake numbers
