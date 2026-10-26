@@ -1,6 +1,6 @@
 # PART IV results summary (generated)
 
-Generated 2026-10-26 20:34 from 88 recorded fits. Results exist for ADMM, PA-ADMM, SMO.
+Generated 2026-10-27 01:47 from 102 recorded fits. Results exist for ADMM, PA-ADMM, SMO.
 Still pending: CVXPY, Pegasos.
 
 ## Data and protocol
@@ -12,29 +12,30 @@ Still pending: CVXPY, Pegasos.
 ## Correctness (one 7,000-row QP, ratio 10:1, tol 1e-4)
 
 - SMO: objective 5.0836, certified, 4,380 iterations/updates
-- ADMM: objective 7.7278, not certified, 10,000 iterations/updates
+- ADMM: objective 5.0836, certified, 7,525 iterations/updates
 - PA-ADMM: objective 5.0832, certified, 5,364 iterations/updates
-- Certified solvers agree to a relative spread of 7.24e-05.
+- Certified solvers agree to a relative spread of 7.69e-05.
 
 ## Main results, full data (198,608 training rows)
 
 | solver | ratio | certified | median t-to-tol (s) | median fit (s) | objective | PR-AUC | cost / example |
 |---|---|---|---|---|---|---|---|
-| SMO | 10:1 | 0/1 | n/a | 2081 | 1670.6 | 0.84 ± 0.00 | 0.00329 |
+| SMO | 10:1 | 0/5 | n/a | 1363 | 1612.3 | 0.75 ± 0.05 | 0.00394 |
 | ADMM | 10:1 | 4/5 | 44 | 411 | 1584.1 | 0.75 ± 0.05 | 0.00380 |
 | PA-ADMM | 10:1 | 4/5 | 48 | 500 | 1584.1 | 0.75 ± 0.05 | 0.00385 |
+| SMO | 20:1 | 0/5 | n/a | 1373 | 2911.8 | 0.76 ± 0.05 | 0.00681 |
 | ADMM | 20:1 | 3/5 | 43 | 360 | 2877.9 | 0.76 ± 0.05 | 0.00648 |
 | PA-ADMM | 20:1 | 5/5 | 49 | 444 | 2877.9 | 0.76 ± 0.05 | 0.00651 |
+| SMO | 50:1 | 0/5 | n/a | 1431 | 6323.1 | 0.76 ± 0.05 | 0.01462 |
 | ADMM | 50:1 | 0/5 | 102 | 565 | 6214.4 | 0.76 ± 0.05 | 0.01462 |
 | PA-ADMM | 50:1 | 3/5 | 75 | 425 | 6214.2 | 0.76 ± 0.05 | 0.01484 |
 
-The largest between-solver PR-AUC gap is 0.002 while the typical seed-to-seed sd is 0.051, so the ranking is noise, not method quality.
+The largest between-solver PR-AUC gap is 0.004 while the typical seed-to-seed sd is 0.051, so the ranking is noise, not method quality.
 
 ## Paired Wilcoxon (main_full)
 
 | ratio | metric | pair | n | p-value |
 |---|---|---|---|---|
-| 10 | time_to_tolerance_sec | admm vs pa_admm | 5 | 1.0 |
 | 10 | fit_time_sec | admm vs pa_admm | 5 | 0.625 |
 | 10 | tuning_fit_time_sec | admm vs pa_admm | 5 | 0.625 |
 | 10 | cost_per_example | admm vs pa_admm | 5 | 1.0 |
@@ -42,8 +43,20 @@ The largest between-solver PR-AUC gap is 0.002 while the typical seed-to-seed sd
 | 10 | recall_at_fpr_0.001 | admm vs pa_admm | 5 | 1.0 |
 | 10 | recall_at_fpr_0.01 | admm vs pa_admm | 5 | 1.0 |
 | 10 | balanced_accuracy | admm vs pa_admm | 5 | 1.0 |
-| 10 | objective | admm vs pa_admm | 5 | 0.4375 |
-| 20 | time_to_tolerance_sec | admm vs pa_admm | 5 | 0.4375 |
+| 10 | fit_time_sec | admm vs smo | 5 | 0.0625 |
+| 10 | tuning_fit_time_sec | admm vs smo | 5 | 0.0625 |
+| 10 | cost_per_example | admm vs smo | 5 | 0.375 |
+| 10 | pr_auc | admm vs smo | 5 | 0.1875 |
+| 10 | recall_at_fpr_0.001 | admm vs smo | 5 | 0.125 |
+| 10 | recall_at_fpr_0.01 | admm vs smo | 5 | 1.0 |
+| 10 | balanced_accuracy | admm vs smo | 5 | 0.125 |
+| 10 | fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
+| 10 | tuning_fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
+| 10 | cost_per_example | pa_admm vs smo | 5 | 0.4375 |
+| 10 | pr_auc | pa_admm vs smo | 5 | 0.3125 |
+| 10 | recall_at_fpr_0.001 | pa_admm vs smo | 5 | 0.125 |
+| 10 | recall_at_fpr_0.01 | pa_admm vs smo | 5 | 1.0 |
+| 10 | balanced_accuracy | pa_admm vs smo | 5 | 0.0625 |
 | 20 | fit_time_sec | admm vs pa_admm | 5 | 0.625 |
 | 20 | tuning_fit_time_sec | admm vs pa_admm | 5 | 0.625 |
 | 20 | cost_per_example | admm vs pa_admm | 5 | 0.5 |
@@ -51,23 +64,24 @@ The largest between-solver PR-AUC gap is 0.002 while the typical seed-to-seed sd
 | 20 | recall_at_fpr_0.001 | admm vs pa_admm | 5 | 1.0 |
 | 20 | recall_at_fpr_0.01 | admm vs pa_admm | 5 | 1.0 |
 | 20 | balanced_accuracy | admm vs pa_admm | 5 | 0.5 |
-| 20 | objective | admm vs pa_admm | 5 | 0.8125 |
-| 50 | time_to_tolerance_sec | admm vs pa_admm | 5 | 0.125 |
-| 50 | fit_time_sec | admm vs pa_admm | 5 | 0.125 |
-| 50 | tuning_fit_time_sec | admm vs pa_admm | 5 | 0.125 |
-| 50 | cost_per_example | admm vs pa_admm | 5 | 1.0 |
-| 50 | pr_auc | admm vs pa_admm | 5 | 0.625 |
-| 50 | recall_at_fpr_0.001 | admm vs pa_admm | 5 | 1.0 |
-| 50 | recall_at_fpr_0.01 | admm vs pa_admm | 5 | 1.0 |
-| 50 | balanced_accuracy | admm vs pa_admm | 5 | 1.0 |
-| 50 | objective | admm vs pa_admm | 5 | 0.625 |
+| 20 | fit_time_sec | admm vs smo | 5 | 0.0625 |
+| 20 | tuning_fit_time_sec | admm vs smo | 5 | 0.0625 |
+| 20 | cost_per_example | admm vs smo | 5 | 0.3125 |
+| 20 | pr_auc | admm vs smo | 5 | 0.3125 |
+| 20 | recall_at_fpr_0.001 | admm vs smo | 5 | 1.0 |
+| 20 | recall_at_fpr_0.01 | admm vs smo | 5 | 1.0 |
+| 20 | balanced_accuracy | admm vs smo | 5 | 0.3125 |
+| 20 | fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
+| 20 | tuning_fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
+| 20 | cost_per_example | pa_admm vs smo | 5 | 0.3125 |
+| 20 | pr_auc | pa_admm vs smo | 5 | 0.8125 |
+| 20 | recall_at_fpr_0.001 | pa_admm vs smo | 5 | 1.0 |
 
 ## Protocol caveats
 
-- SMO stopped at its own 100,000-update cap on 1/1 main_full fits after 2081s of a 5400s budget (7/9 at 35k). Raising that cap for a time-matched comparison is an open protocol decision with WP2.
-- 1 main_full record(s) have no reference objective yet: references are assigned once the campaign finishes, so this summary is mid-run.
+- SMO stopped at its own 100,000-update cap on 15/15 main_full fits after 1393s of a 5400s budget (7/9 at 35k). Raising that cap for a time-matched comparison is an open protocol decision with WP2.
 - No results for CVXPY, Pegasos; the ranking is not the final five-method comparison.
 
-Coverage on main_full: · coverage SMO 1/15, ADMM 15/15, PA-ADMM 15/15
+Coverage on main_full: complete
 
 This file is generated by slides/build_part4_deck.py; do not edit it by hand.

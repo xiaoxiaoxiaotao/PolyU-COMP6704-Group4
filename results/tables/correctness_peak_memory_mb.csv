@@ -1,4 +1,4 @@
 dataset,method,variant,cost_ratio,evaluation_cost_ratio,n_train,C,objective_recomputable,n,mean,std,ci_low,ci_high
-ulb,admm,base,10,10,7000,,,1,5.34765625,0.0,5.34765625,5.34765625
-ulb,pa_admm,base,10,10,7000,,,1,0.01171875,0.0,0.01171875,0.01171875
-ulb,smo,base,10,10,7000,,,1,0.33984375,0.0,0.33984375,0.33984375
+ulb,admm,base,10,10,7000,,,1,4.04296875,0.0,4.04296875,4.04296875
+ulb,pa_admm,base,10,10,7000,,,1,0.02734375,0.0,0.02734375,0.02734375
+ulb,smo,base,10,10,7000,,,1,0.34375,0.0,0.34375,0.34375
