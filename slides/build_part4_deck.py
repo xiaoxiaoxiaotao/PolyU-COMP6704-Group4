@@ -1016,6 +1016,63 @@ def main() -> None:
               "and the cost-aware comparison; a speed verdict waits for Pegasos and the CVXPY "
               "baseline, and for more seeds.")
 
+    # Appendix A - fairness controls
+    slide = content_slide(prs, body_layout, "Appendix: fairness controls in detail")
+    chrome(slide, "PART IV  /  APPENDIX · CONTROLS",
+           "Each control exists because a first draft of the harness got it wrong",
+           "src/evaluate.py · EXPERIMENTS.md §5.1, §6.5 · tests/test_harness_smoke.py",
+           "IV · 11")
+    add_table(slide, 0.58, 1.68, 11.6, 3.4, ["control", "what it prevents"], [
+        ["Identical rows, no per-method caps",
+         "comparing a solver on 10k rows against one on 198k rows"],
+        ["Fixed C=1 for ranking; C grouped otherwise",
+         "comparing objectives of two different QPs after independent C tuning"],
+        ["Validation-only threshold and C",
+         "test-set tuning; the test split is touched exactly once per run"],
+        ["≥ 2 aligned objective/timestamp checkpoints",
+         "a single-point solve being reported as a convergence curve"],
+        ["Objective recomputed from w, b",
+         "a solver reporting a differently normalised (e.g. per-example) objective"],
+        ["Nonlinear runs leave the objective comparison",
+         "an RKHS objective being ranked against linear-SVM objectives"],
+        ["90-minute budget, single thread, one machine",
+         "wall-clock comparisons across different hardware or thread counts"],
+        ["reuse_existing with exact metadata matching",
+         "silently mixing results produced from different splits or hyper-parameters"],
+    ], font_size=11, column_widths=[4.6, 7.0])
+    set_notes(slide,
+              "Backup for questions about fairness. Every row here came from a concrete review "
+              "finding on our own harness, and each one is covered by a regression test.")
+
+    # Appendix B - reproduction
+    slide = content_slide(prs, body_layout, "Appendix: reproducing these numbers")
+    chrome(slide, "PART IV  /  APPENDIX · REPRODUCTION",
+           "One command per experiment; every run carries a config hash",
+           "experiments/check_solver.py · run_correctness.py · run_main.py · make_report_assets.py",
+           "IV · 12")
+    add_text(slide, 0.58, 1.75, 11.6, 3.2,
+             "1.  python experiments/check_solver.py --method smo|admm|pa_admm\n"
+             "     → results/raw/solver_checks/<method>.json (contract + diagnostics)\n\n"
+             "2.  python experiments/run_correctness.py\n"
+             "     → 7,000-row agreement check, reference_method: cvxpy\n\n"
+             "3.  python experiments/run_main.py --config configs/main_capped.yaml\n"
+             "                                       configs/main_fast.yaml\n"
+             "                                       configs/main_full.yaml\n"
+             "     → results/raw/<experiment>/…  and results/tables/<experiment>_*.csv\n\n"
+             "4.  python experiments/make_report_assets.py\n"
+             "     → results/figures/*.pdf from the aggregated tables\n\n"
+             "5.  python slides/build_part4_deck.py --template … --check\n"
+             "     → this deck, rebuilt from the JSONs; nothing on these slides is typed in",
+             size=13, color=DARK)
+    add_text(slide, 0.58, 5.15, 11.6, 0.9,
+             "Data is pinned by SHA-256 (76274b69…1a89) and the five stratified split files are "
+             "committed, so a rerun reproduces the same rows. Raw run JSONs and logs stay out of "
+             "git; aggregate tables and figures are versioned.",
+             size=12, color=GREY)
+    set_notes(slide,
+              "Backup for 'how do I reproduce this?'. Emphasise that the deck itself is generated "
+              "from the run JSONs, so slides and results cannot drift apart.")
+
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(output))

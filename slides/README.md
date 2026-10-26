@@ -36,7 +36,11 @@ listed as pending instead of being filled in.
 | 8 | Full data at a glance | 40 |
 | 9 | Performance under the deployment cost model | 50 |
 | 10 | What we can and cannot claim | 55 |
-| | **Total** | **≈ 8:20** |
+| | **Total (slides 1–10)** | **≈ 8:20** |
+| 11 | Appendix: fairness controls in detail | Q&A only |
+| 12 | Appendix: reproducing these numbers | Q&A only |
+
+Slides 11–12 are backup for the 10-minute Q&A and are not part of the 8 minutes.
 
 Speaker notes with the narration for each slide live in the deck itself
 (View → Notes). Keep the ordering: data → protocol → metrics → correctness →
