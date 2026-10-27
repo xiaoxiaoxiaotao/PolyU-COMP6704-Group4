@@ -571,8 +571,11 @@ The whole project is done when:
 - [x] Run `correctness` (four-way agreement on the 10k subset; SMO/ADMM/PA-ADMM agree to
       ~7.7e-5 relative, Pegasos sits above the exact solvers as a first-order method) and
       `main_capped` / `main_fast` / `main_full`.
-- [ ] Complete the `pegasos` ladder (same three configs, `reuse_existing: true` so the
-      finished solvers are never refit) and re-aggregate.
+- [x] Complete the `pegasos` ladder (34 fits: 1 correctness, 9 capped, 9 fast, 15 full; the
+      other solvers were reused, never refit). Outcome on full data: SMO/ADMM/PA-ADMM land
+      within 1.8% of the QP optimum, Pegasos stays 18–39% above it and never reaches the shared
+      tolerance; only ADMM (7/15) and PA-ADMM (12/15) certify seeds. PR-AUC is flat across all
+      four solvers, so detection quality is set by the data, not by the solver.
 - [ ] Run `predictive` for validation-tuned predictive metrics; keep it separate from the
       fixed-C solver ranking.
 - [x] Freeze the ranking configs (`C_grid: [1.0]`) and run `main_full` (45/45 runs ok, 0
