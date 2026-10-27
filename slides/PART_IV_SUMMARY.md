@@ -1,6 +1,6 @@
 # PART IV results summary (generated)
 
-Generated 2026-10-27 11:00 from 105 recorded fits. Results exist for ADMM, PA-ADMM, Pegasos, SMO.
+Generated 2026-10-27 14:43 from 136 recorded fits. Results exist for ADMM, PA-ADMM, Pegasos, SMO.
 No solvers pending.
 
 ## Data and protocol
@@ -22,21 +22,25 @@ No solvers pending.
 | solver | ratio | certified | median t-to-tol (s) | median fit (s) | objective | PR-AUC | cost / example |
 |---|---|---|---|---|---|---|---|
 | SMO | 10:1 | 0/5 | n/a | 1363 | 1612.3 | 0.75 ± 0.05 | 0.00394 |
+| Pegasos | 10:1 | 0/5 | n/a | 688 | 1876.7 | 0.75 ± 0.05 | 0.00341 |
 | ADMM | 10:1 | 4/5 | 44 | 411 | 1584.1 | 0.75 ± 0.05 | 0.00380 |
 | PA-ADMM | 10:1 | 4/5 | 48 | 500 | 1584.1 | 0.75 ± 0.05 | 0.00385 |
 | SMO | 20:1 | 0/5 | n/a | 1373 | 2911.8 | 0.76 ± 0.05 | 0.00681 |
+| Pegasos | 20:1 | 0/5 | n/a | 726 | 3633.3 | 0.76 ± 0.05 | 0.00623 |
 | ADMM | 20:1 | 3/5 | 43 | 360 | 2877.9 | 0.76 ± 0.05 | 0.00648 |
 | PA-ADMM | 20:1 | 5/5 | 49 | 444 | 2877.9 | 0.76 ± 0.05 | 0.00651 |
 | SMO | 50:1 | 0/5 | n/a | 1431 | 6323.1 | 0.76 ± 0.05 | 0.01462 |
+| Pegasos | 50:1 | 0/5 | n/a | 706 | 8667.0 | 0.75 ± 0.05 | 0.01447 |
 | ADMM | 50:1 | 0/5 | 102 | 565 | 6214.4 | 0.76 ± 0.05 | 0.01462 |
 | PA-ADMM | 50:1 | 3/5 | 75 | 425 | 6214.2 | 0.76 ± 0.05 | 0.01484 |
 
-The largest between-solver PR-AUC gap is 0.004 while the typical seed-to-seed sd is 0.051, so the ranking is noise, not method quality.
+The largest between-solver PR-AUC gap is 0.011 while the typical seed-to-seed sd is 0.051, so the ranking is noise, not method quality.
 
 ## Paired Wilcoxon (main_full)
 
 | ratio | metric | pair | n | p-value |
 |---|---|---|---|---|
+| 10 | time_to_tolerance_sec | admm vs pa_admm | 5 | 1.0 |
 | 10 | fit_time_sec | admm vs pa_admm | 5 | 0.625 |
 | 10 | tuning_fit_time_sec | admm vs pa_admm | 5 | 0.625 |
 | 10 | cost_per_example | admm vs pa_admm | 5 | 1.0 |
@@ -44,6 +48,15 @@ The largest between-solver PR-AUC gap is 0.004 while the typical seed-to-seed sd
 | 10 | recall_at_fpr_0.001 | admm vs pa_admm | 5 | 1.0 |
 | 10 | recall_at_fpr_0.01 | admm vs pa_admm | 5 | 1.0 |
 | 10 | balanced_accuracy | admm vs pa_admm | 5 | 1.0 |
+| 10 | objective | admm vs pa_admm | 5 | 0.4375 |
+| 10 | fit_time_sec | admm vs pegasos | 5 | 0.0625 |
+| 10 | tuning_fit_time_sec | admm vs pegasos | 5 | 0.0625 |
+| 10 | cost_per_example | admm vs pegasos | 5 | 0.25 |
+| 10 | pr_auc | admm vs pegasos | 5 | 1.0 |
+| 10 | recall_at_fpr_0.001 | admm vs pegasos | 5 | 0.25 |
+| 10 | recall_at_fpr_0.01 | admm vs pegasos | 5 | 1.0 |
+| 10 | balanced_accuracy | admm vs pegasos | 5 | 0.875 |
+| 10 | objective | admm vs pegasos | 5 | 0.0625 |
 | 10 | fit_time_sec | admm vs smo | 5 | 0.0625 |
 | 10 | tuning_fit_time_sec | admm vs smo | 5 | 0.0625 |
 | 10 | cost_per_example | admm vs smo | 5 | 0.375 |
@@ -51,6 +64,15 @@ The largest between-solver PR-AUC gap is 0.004 while the typical seed-to-seed sd
 | 10 | recall_at_fpr_0.001 | admm vs smo | 5 | 0.125 |
 | 10 | recall_at_fpr_0.01 | admm vs smo | 5 | 1.0 |
 | 10 | balanced_accuracy | admm vs smo | 5 | 0.125 |
+| 10 | objective | admm vs smo | 5 | 0.0625 |
+| 10 | fit_time_sec | pa_admm vs pegasos | 5 | 0.0625 |
+| 10 | tuning_fit_time_sec | pa_admm vs pegasos | 5 | 0.0625 |
+| 10 | cost_per_example | pa_admm vs pegasos | 5 | 0.25 |
+| 10 | pr_auc | pa_admm vs pegasos | 5 | 0.8125 |
+| 10 | recall_at_fpr_0.001 | pa_admm vs pegasos | 5 | 0.25 |
+| 10 | recall_at_fpr_0.01 | pa_admm vs pegasos | 5 | 1.0 |
+| 10 | balanced_accuracy | pa_admm vs pegasos | 5 | 0.875 |
+| 10 | objective | pa_admm vs pegasos | 5 | 0.0625 |
 | 10 | fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
 | 10 | tuning_fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
 | 10 | cost_per_example | pa_admm vs smo | 5 | 0.4375 |
@@ -58,25 +80,6 @@ The largest between-solver PR-AUC gap is 0.004 while the typical seed-to-seed sd
 | 10 | recall_at_fpr_0.001 | pa_admm vs smo | 5 | 0.125 |
 | 10 | recall_at_fpr_0.01 | pa_admm vs smo | 5 | 1.0 |
 | 10 | balanced_accuracy | pa_admm vs smo | 5 | 0.0625 |
-| 20 | fit_time_sec | admm vs pa_admm | 5 | 0.625 |
-| 20 | tuning_fit_time_sec | admm vs pa_admm | 5 | 0.625 |
-| 20 | cost_per_example | admm vs pa_admm | 5 | 0.5 |
-| 20 | pr_auc | admm vs pa_admm | 5 | 0.125 |
-| 20 | recall_at_fpr_0.001 | admm vs pa_admm | 5 | 1.0 |
-| 20 | recall_at_fpr_0.01 | admm vs pa_admm | 5 | 1.0 |
-| 20 | balanced_accuracy | admm vs pa_admm | 5 | 0.5 |
-| 20 | fit_time_sec | admm vs smo | 5 | 0.0625 |
-| 20 | tuning_fit_time_sec | admm vs smo | 5 | 0.0625 |
-| 20 | cost_per_example | admm vs smo | 5 | 0.3125 |
-| 20 | pr_auc | admm vs smo | 5 | 0.3125 |
-| 20 | recall_at_fpr_0.001 | admm vs smo | 5 | 1.0 |
-| 20 | recall_at_fpr_0.01 | admm vs smo | 5 | 1.0 |
-| 20 | balanced_accuracy | admm vs smo | 5 | 0.3125 |
-| 20 | fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
-| 20 | tuning_fit_time_sec | pa_admm vs smo | 5 | 0.0625 |
-| 20 | cost_per_example | pa_admm vs smo | 5 | 0.3125 |
-| 20 | pr_auc | pa_admm vs smo | 5 | 0.8125 |
-| 20 | recall_at_fpr_0.001 | pa_admm vs smo | 5 | 1.0 |
 
 ## Protocol caveats
 

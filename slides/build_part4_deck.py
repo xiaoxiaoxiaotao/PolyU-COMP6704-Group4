@@ -221,19 +221,31 @@ def fig_protocol(path: Path) -> Path:
 
 def fig_curves(runs: list[dict], ratio: float, seed: int, path: Path,
                tolerance: float = 1e-3) -> Path:
-    """Zoom on the tolerance band; far-away initial iterates are annotated."""
+    """Left: who enters the tolerance band. Right: who never arrives."""
     best = best_objective_by_group(runs).get((ratio, seed))
-    fig, ax = new_figure(6.6, 3.1)
+    fig, (ax, ax2) = plt.subplots(
+        1, 2, figsize=(7.6, 2.75), gridspec_kw={"width_ratios": [1.5, 1.0]})
+    fig.patch.set_facecolor("white")
+    for axis in (ax, ax2):
+        for side in ("top", "right"):
+            axis.spines[side].set_visible(False)
+        axis.spines["left"].set_color(HEX_GREY)
+        axis.spines["bottom"].set_color(HEX_GREY)
+        axis.tick_params(colors=HEX_GREY, labelsize=8.5)
+        axis.set_axisbelow(True)
+        axis.grid(True, color=HEX_GREY, alpha=0.18, linewidth=0.7)
     if best is None:
         return save(fig, path)
     band = 1.0 + tolerance
-    clipped = 0
     crossings = []
+    finals = []
     for method in method_order(runs):
         group = [r for r in cells(runs, method, ratio) if int(r["seed"]) == seed]
         if not group:
             continue
         record = group[0]
+        color = METHOD_COLORS.get(method, HEX_GREY)
+        label = METHOD_LABELS.get(method, method)
         history, times = record.get("objective_history"), record.get("time_history")
         if not history or not times or len(history) != len(times):
             continue
@@ -241,47 +253,59 @@ def fig_curves(runs: list[dict], ratio: float, seed: int, path: Path,
         seconds = np.asarray(times, dtype=float)
         finite = np.isfinite(objective) & np.isfinite(seconds)
         objective, seconds = objective[finite], seconds[finite]
-        visible = objective <= band * 3.0
-        clipped += int(np.sum(~visible))
-        ax.plot(seconds[visible], objective[visible],
-                color=METHOD_COLORS.get(method, HEX_GREY), linewidth=1.8,
-                label=METHOD_LABELS.get(method, method))
+        gap = record.get("relative_gap")
+        finals.append((label, float(objective[-1] - 1.0) if gap is None else float(gap),
+                       color))
+        inside = objective <= 1.03
+        ax.plot(seconds[inside], objective[inside], color=color, linewidth=1.7,
+                label=label)
         hit = np.flatnonzero(objective <= band)
         if hit.size:
-            crossing = (float(seconds[hit[0]]), float(objective[hit[0]]))
-            crossings.append(crossing)
-            ax.plot(*crossing, marker="o", markersize=5,
-                    color=METHOD_COLORS.get(method, HEX_GREY))
-            ax.annotate(f"{crossing[0]:.0f}s", crossing, textcoords="offset points",
-                        xytext=(4, 8), fontsize=8,
-                        color=METHOD_COLORS.get(method, HEX_GREY))
+            crossings.append((float(seconds[hit[0]]), label, color))
     ax.axhline(1.0, color=HEX_GREY, linestyle=":", linewidth=1.0)
     ax.axhline(band, color=HEX_RED, linestyle="--", linewidth=1.0)
-    ax.text(1.01, band, "tolerance", color=HEX_RED, fontsize=8, va="center")
-    top = max([value for _, value in crossings] or [band])
-    ax.set_ylim(0.995, min(top * 1.9, band * 3.0))
+    ax.text(0.99, band, "0.1% band", color=HEX_RED, fontsize=8, va="bottom",
+            ha="right", transform=ax.get_yaxis_transform())
+    ax.set_ylim(0.995, 1.03)
     if crossings:
-        ax.set_xlim(0, max(t for t, _ in crossings) * 1.55 + 1.0)
-    if clipped:
-        ax.text(0.02, 0.96,
-                f"{clipped} early checkpoints sit above this band\n"
-                "(cold start and Pegasos warm-start transients)",
-                transform=ax.transAxes, fontsize=7.5, color=HEX_GREY, va="top")
+        ax.set_xlim(0, max(t for t, _, _ in crossings) * 1.7 + 1.0)
+    for index, (seconds_hit, label, color) in enumerate(crossings):
+        ax.plot(seconds_hit, band, marker="o", markersize=5, color=color)
+        ax.annotate(f"{label} {seconds_hit:.0f}s", (seconds_hit, band),
+                    textcoords="offset points", xytext=(6, 7 + 11 * index),
+                    fontsize=8, color=color)
+    missed = [name for name, gap, _ in finals if gap > tolerance]
+    if missed:
+        ax.text(0.98, 0.86, f"{' and '.join(missed)} never enter this band\n"
+                            "(final gap on the right)", transform=ax.transAxes,
+                fontsize=8, color=HEX_GREY, va="top", ha="right")
     ax.set_xlabel("seconds since fit start", fontsize=9, color=HEX_GREY)
     ax.set_ylabel("objective / group best", fontsize=9, color=HEX_GREY)
-    ax.set_title(f"Time-to-tolerance, full data, {ratio:g}:1, seed {seed}",
-                 color=HEX_DARK, fontsize=10)
-    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.set_title(f"Full data, {ratio:g}:1, seed {seed}", color=HEX_DARK, fontsize=9.5)
+
+    order = sorted(finals, key=lambda item: item[1])
+    positions = np.arange(len(order))
+    gaps = [gap for _, gap, _ in order]
+    values = [max(gap, 1.6e-6) for gap in gaps]
+    ax2.barh(positions, values, color=[color for _, _, color in order], height=0.62)
+    ax2.set_yticks(positions)
+    ax2.set_yticklabels([name for name, _, _ in order], fontsize=8.5)
+    ax2.invert_yaxis()
+    ax2.set_xscale("log")
+    ax2.set_xlim(1e-6, 1.2)
+    ax2.axvline(tolerance, color=HEX_RED, linestyle="--", linewidth=1.0)
+    for position, gap, value in zip(positions, gaps, values):
+        ax2.text(value * 1.35, position,
+                 "0" if gap <= 0 else (f"{gap:.0e}" if gap < 1e-3 else f"{gap:.1%}"),
+                 va="center", fontsize=8, color=HEX_GREY)
+    ax2.set_xlabel("final gap to group best (log)", fontsize=9, color=HEX_GREY)
+    ax2.set_title("Final gap", color=HEX_DARK, fontsize=9.5)
     return save(fig, path)
 
 
 def fig_speed_and_reliability(summary: dict, methods: list[str], path: Path) -> Path:
-    fig, axes = plt.subplots(1, 2, figsize=(11.4, 2.6))
+    fig, axes = plt.subplots(1, 2, figsize=(11.4, 2.7))
     fig.patch.set_facecolor("white")
-    keys = [(m, r) for m in methods for r in RATIOS if (m, r) in summary]
-    by_ratio = {r: [] for r in RATIOS}
-    for m, r in keys:
-        by_ratio[r].append(m)
 
     ax = axes[0]
     for side in ("top", "right"):
@@ -290,49 +314,65 @@ def fig_speed_and_reliability(summary: dict, methods: list[str], path: Path) -> 
     group_centres = []
     offset = 0.0
     for ratio in RATIOS:
+        group = [(method, summary[(method, ratio)]["ttol"]) for method in methods
+                 if (method, ratio) in summary
+                 and math.isfinite(summary[(method, ratio)]["ttol"])]
+        if not group:
+            continue
         start = offset
-        for method in by_ratio[ratio]:
+        for method, value in group:
             positions.append(offset)
-            values.append(summary[(method, ratio)]["ttol"])
+            values.append(value)
             colors.append(METHOD_COLORS.get(method, HEX_GREY))
             names.append(METHOD_LABELS.get(method, method))
             offset += 1.0
         group_centres.append(((start + offset - 1) / 2.0, f"{ratio:g}:1"))
-        offset += 0.6
+        offset += 0.8
     ax.bar(positions, values, color=colors, width=0.85)
     for x, value in zip(positions, values):
-        ax.text(x, value, f" {value:.0f}s", va="bottom", ha="left", fontsize=7.5,
+        ax.text(x, value, f"{value:.0f}s", ha="center", va="bottom", fontsize=8,
                 color=HEX_GREY)
     ax.set_xticks(positions)
-    ax.set_xticklabels(names, fontsize=8, rotation=0)
+    ax.set_xticklabels(names, fontsize=8.5)
     for centre, label in group_centres:
-        ax.text(centre, -0.13, label, transform=ax.get_xaxis_transform(),
+        ax.text(centre, -0.16, label, transform=ax.get_xaxis_transform(),
                 ha="center", va="top", fontsize=9, color=HEX_RED, fontweight="bold")
+    never = [METHOD_LABELS.get(method, method) for method in methods
+             if not any((method, ratio) in summary
+                        and math.isfinite(summary[(method, ratio)]["ttol"])
+                        for ratio in RATIOS)]
+    if never:
+        ax.text(0.01, 0.97, f"{' and '.join(never)} never reach the band",
+                transform=ax.transAxes, ha="left", va="top", fontsize=8.5,
+                color=HEX_GREY)
     ax.set_ylabel("median time-to-tolerance (s)", fontsize=9, color=HEX_GREY)
     ax.set_title("Seconds to reach the common objective tolerance", color=HEX_DARK,
                  fontsize=10)
+
     ax2 = axes[1]
     for side in ("top", "right"):
         ax2.spines[side].set_visible(False)
-    width = 0.24
+    seed_total = max((entry["n"] for entry in summary.values()), default=0)
     for index, method in enumerate(methods):
-        x = np.arange(len(RATIOS)) + (index - (len(methods) - 1) / 2) * width
-        rates = []
-        for ratio in RATIOS:
-            entry = summary.get((method, ratio))
-            rates.append(100.0 * entry["converged"] / entry["n"] if entry else np.nan)
-        bars = ax2.bar(x, rates, width, color=METHOD_COLORS.get(method, HEX_GREY),
-                       label=METHOD_LABELS.get(method, method))
-        for rect, rate, entry in zip(bars, rates,
-                                     [summary.get((method, r)) for r in RATIOS]):
-            if entry:
-                ax2.text(rect.get_x() + rect.get_width() / 2, rate,
-                         f"{entry['converged']}/{entry['n']}", ha="center", va="bottom",
+        points = [(RATIOS.index(ratio), summary[(method, ratio)])
+                  for ratio in RATIOS if (method, ratio) in summary]
+        if not points:
+            continue
+        color = METHOD_COLORS.get(method, HEX_GREY)
+        jitter = (index - (len(methods) - 1) / 2) * 0.14
+        xs = [position + jitter for position, _ in points]
+        ys = [entry["converged"] for _, entry in points]
+        ax2.plot(xs, ys, linestyle="none", marker="o", markersize=8, color=color,
+                 label=METHOD_LABELS.get(method, method))
+        for x, yvalue, (_, entry) in zip(xs, ys, points):
+            ax2.annotate(f"{yvalue}/{entry['n']}", (x, yvalue),
+                         textcoords="offset points", xytext=(0, 9), ha="center",
                          fontsize=7.5, color=HEX_GREY)
     ax2.set_xticks(np.arange(len(RATIOS)))
-    ax2.set_xticklabels([f"{r}:1" for r in RATIOS], fontsize=9)
-    ax2.set_ylim(0, 118)
-    ax2.set_ylabel("% of seeds certified", fontsize=9, color=HEX_GREY)
+    ax2.set_xticklabels([f"{ratio}:1" for ratio in RATIOS], fontsize=9)
+    ax2.set_yticks(range(seed_total + 1))
+    ax2.set_ylim(-0.6, seed_total + 2.2)
+    ax2.set_ylabel(f"seeds certified (of {seed_total})", fontsize=9, color=HEX_GREY)
     ax2.set_title("Solver-stopping certificate met per cost ratio", color=HEX_DARK,
                   fontsize=10)
     ax2.legend(frameon=False, fontsize=8, ncol=len(methods), loc="upper center")
@@ -384,8 +424,10 @@ def fig_correctness(runs: list[dict], path: Path) -> Path:
     ax.axhline(best, color=HEX_RED, linestyle="--", linewidth=1.0)
     for index, (method, value) in enumerate(zip(methods, values)):
         group = cells(runs, method, None)
-        ax.text(index, value, f"{value:.3f}\n({100 * (value - best) / best:.1f}% higher)"
-                if value > best else f"{value:.3f}\ncertified",
+        relative = (value - best) / best
+        ax.text(index, value,
+                f"{value:.4f}\n"
+                + ("at reference" if relative < 1e-4 else f"{100 * relative:.1f}% higher"),
                 ha="center", va="bottom", fontsize=8, color=HEX_GREY)
         if not all(bool(r["converged"]) for r in group):
             ax.text(index, values[index] * 0.12, "not certified", ha="center",
@@ -676,18 +718,12 @@ def main() -> None:
         if len(certified_objectives) >= 2 else float("nan")
     )
 
-    p_values = []
     wilcoxon_rows: list[dict[str, str]] = []
     wilcoxon_path = root / "tables" / "main_full_wilcoxon.csv"
     if wilcoxon_path.exists():
         with wilcoxon_path.open("r", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
                 wilcoxon_rows.append(row)
-                try:
-                    p_values.append(float(row["p_value"]))
-                except (TypeError, ValueError, KeyError):
-                    continue
-    wilcoxon_min_p = min(p_values) if p_values else float("nan")
 
     def entry(method: str, ratio: float) -> dict:
         return summary_full.get((method, ratio), {})
@@ -967,7 +1003,7 @@ def main() -> None:
     # 7 - Speed / reliability
     slide = content_slide(prs, body_layout, "Main results: speed and certified convergence")
     chrome(slide, "PART IV  /  MAIN RESULTS · SPEED",
-           "Reaching tolerance is minutes apart; certifying the optimum is where methods diverge",
+           "Only ADMM and PA-ADMM reach the band; certifying seeds is where they diverge",
            "results/tables/main_full_*.csv · 5 seeds × 3 ratios · full data"
            + coverage_suffix,
            "IV · 07")
@@ -1013,15 +1049,17 @@ def main() -> None:
              "At 20:1 on the full data, median time-to-tolerance: " + ", ".join(ttol_bits)
              + (f". {' and '.join(never_reached)} never reached the tolerance at 20:1."
                 if never_reached else ".")
-             + " Final fit time is dominated by iterating past the tolerance line until the "
-             "solver's own certificate (KKT / residual + duality gap) is satisfied."
+             + " ADMM and PA-ADMM keep iterating past the tolerance until their own "
+             "certificate is met; SMO stops at its 100k-update cap and Pegasos at its "
+             "5,000-epoch cap, which is why neither enters the band."
              f"\nRight panel counts certified seeds at the hardest ratio 50:1 → {hard_bits}."
              f"{hardest_line}{cap_note}",
              size=12.5, color=GREY)
     set_notes(slide,
-              "~55s: this is the solver-ranking slide. Be careful in wording: differences in "
-              "time-to-tolerance are not significant at 5 seeds, the reliable signal is "
-              "convergence certification, especially at 50:1.")
+              "~55s: this is the solver-ranking slide. Two numbers matter: who reaches the "
+              "0.1% band at all (only the ADMM pair), and who can certify a solve at 50:1 "
+              "(PA-ADMM 3/5, cold ADMM 0/5). Time-to-tolerance differences inside the band "
+              "are not significant at 5 seeds.")
 
     # 7b - Full-data grid
     grid_rows = []
@@ -1038,7 +1076,7 @@ def main() -> None:
                 f"{fmt(value['pr_auc'])} ± {fmt(value['pr_auc_sd'])}",
                 fmt(value["cost"], "{:.5f}"),
             ])
-    grid_height = 0.32 * (len(grid_rows) + 1) + 0.2
+    grid_height = 0.295 * (len(grid_rows) + 1) + 0.18
     slide = content_slide(prs, body_layout, "Full data at a glance")
     chrome(slide, "PART IV  /  MAIN RESULTS · GRID",
            "Every cell is the same QP on the same 198,608 training rows",
@@ -1049,13 +1087,12 @@ def main() -> None:
         add_table(slide, 0.58, 1.68, 11.5, grid_height,
                   ["solver", "ratio", "certified", "median t-to-tol (s)",
                    "median fit (s)", "objective", "PR-AUC", "cost / example"],
-                  grid_rows, font_size=11,
+                  grid_rows, font_size=10.5,
                   column_widths=[1.5, 0.8, 1.1, 1.7, 1.4, 1.3, 1.9, 1.5])
-        add_text(slide, 0.58, 1.68 + grid_height + 0.15, 11.6, 0.8,
-                 "t-to-tol = median over the 5 seeds of the first checkpoint within 0.1% of "
-                 "that group's best observed objective; certified = the solver's own stopping "
-                 "certificate; PR-AUC ± sd is the seed spread.",
-                 size=12, color=GREY)
+        add_text(slide, 0.58, 1.68 + grid_height + 0.09, 11.6, 0.3,
+                 "t-to-tol = median over 5 seeds of the first checkpoint within 0.1% of the "
+                 "best; certified = the solver's stopping certificate; PR-AUC is mean ± seed sd.",
+                 size=10.5, color=GREY)
     else:
         add_text(slide, 0.58, 1.9, 11.6, 1.0,
                  "No full-data runs recorded yet.", size=14, color=GREY)
@@ -1090,22 +1127,50 @@ def main() -> None:
     # 9 - Statistics and takeaways
     slide = content_slide(prs, body_layout, "What we can and cannot claim")
     chrome(slide, "PART IV  /  FINDINGS",
-           "Claim reliability and cost-aware ranking; do not claim a speed winner yet",
+           "Certified time-to-solution separates the solvers; detection quality does not",
            "results/tables/main_full_wilcoxon.csv · EXPERIMENTS.md §10",
            "IV · 10")
     admm_hard = hard_regime.get("admm", {})
     pa_hard = hard_regime.get("pa_admm", {})
+
+    def gaps_of(methods: tuple[str, ...]) -> list[float]:
+        return [summary_full[(m, r)]["gap"] for m in methods for r in RATIOS
+                if (m, r) in summary_full
+                and math.isfinite(summary_full[(m, r)]["gap"])]
+
+    exact_gaps = gaps_of(("admm", "pa_admm"))
+    smo_gaps = gaps_of(("smo",))
+    pegasos_gaps = gaps_of(("pegasos",))
+    seed_count = len({int(r["seed"]) for r in primary}) if primary else 0
+    p_floor = 2.0 / 2 ** seed_count if seed_count else float("nan")
+
+    def p_min(metric_name: str) -> float:
+        values = []
+        for row in wilcoxon_rows:
+            if row.get("metric") != metric_name:
+                continue
+            try:
+                values.append(float(row["p_value"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return min(values) if values else float("nan")
+
+    p_objective = p_min("objective")
+    p_quality = p_min("pr_auc")
     numbers = [
-        ("01", "Objective values agree across solvers",
-         (f"At fixed C=1 the certified solvers agree to {correctness_spread:.1e} on the same QP, "
-          "and every full-data run finishes within 0.1% of its group reference."
-          if correctness_spread == correctness_spread else
-          "At fixed C=1 every completed run is measured against the same group reference.")),
-        ("02", "No significant ranking difference yet",
-         (f"Paired Wilcoxon over the recorded seeds: the smallest p-value across all paired "
-          f"tests is {wilcoxon_min_p:.3f} (objective, cost, PR-AUC, time-to-tolerance), so seed "
-          "noise dominates method differences."
-          if wilcoxon_min_p == wilcoxon_min_p else
+        ("01", "The QP solution separates the solvers",
+         (f"Same fixed-C QP on full data: ADMM and PA-ADMM end within "
+          f"{max(exact_gaps):.1e} of the group best, SMO {st.mean(smo_gaps):.1%} above it "
+          f"because it hits its update cap, Pegasos {min(pegasos_gaps):.0%}–"
+          f"{max(pegasos_gaps):.0%} above it. Only the exact solvers reach the shared tolerance."
+          if exact_gaps and smo_gaps and pegasos_gaps else
+          "Every completed run is measured against the same group reference.")),
+        ("02", f"{seed_count} seeds cannot certify a winner",
+         (f"The smallest two-sided p that {seed_count} paired seeds can produce is {p_floor:.3f}. "
+          f"The objective ordering is unanimous (p = {p_objective:.3f}), but PR-AUC never "
+          f"separates (min p = {p_quality:.2f}): the solver changes how fast and how "
+          "certifiably you reach the QP solution, not what you detect."
+          if p_quality == p_quality else
           "Paired Wilcoxon tests are pending more completed pairs.")),
         ("03", "Reliability is where the methods differ",
          (f"At 50:1 the cold ADMM certified {admm_hard.get('converged', '?')}/{admm_hard.get('n', '?')} "
@@ -1113,10 +1178,9 @@ def main() -> None:
           f"for about {fmt(warm_start_cost, '{:+.0f}')}s of extra fit time at 20:1 — the warm start "
           "buys convergence, not wall-clock speed.")),
         ("04", "Limits to state openly",
-         (f"{fits_recorded} fits are recorded so far; pending: "
-          f"{', '.join(METHOD_LABELS.get(p, p) for p in pending) if pending else 'none'}. "
-          "The capped-subset quality bars rest on a handful of test frauds, and all timings "
-          "come from one single-threaded machine.")),
+         ("SMO is update-capped (100k) and Pegasos is epoch-capped (5,000 epochs = 15.5M steps), "
+          "so neither gap is a wall-clock failure; the capped-subset quality bars rest on three "
+          "test frauds, and every timing comes from one single-threaded machine.")),
     ]
     y = 1.72
     for label, head, body in numbers:
@@ -1125,9 +1189,10 @@ def main() -> None:
         add_text(slide, 1.4, y + 0.36, 11.2, 0.6, body, size=12.5, color=GREY)
         y += 1.02
     set_notes(slide,
-              "~55s: close on the honest framing. The contribution is the measurement protocol "
-              "and the cost-aware comparison; a speed verdict waits for Pegasos and the CVXPY "
-              "baseline, and for more seeds.")
+              "~55s: close on the honest framing. The contribution is the measurement protocol: "
+              "same QP, same rows, same budget. The solvers separate on certified time-to-solution "
+              "and on reliability, not on detection quality, and 5 seeds put a floor of 0.0625 on "
+              "any paired p-value.")
 
     # Appendix A - fairness controls
     slide = content_slide(prs, body_layout, "Appendix: fairness controls in detail")

@@ -339,7 +339,15 @@ def plot_convergence(
         placeholder_figure(path, "Weighted objective vs time")
         return path
 
-    figure, axis = plt.subplots(figsize=(8.0, 4.5))
+    best = min(
+        (float(record["objective"]) for record in records if record.get("objective")),
+        default=None,
+    )
+    tolerance = next(
+        (float(record["tolerance"]) for record in records if record.get("tolerance")),
+        1e-3,
+    )
+    figure, axis = plt.subplots(figsize=(8.0, 4.2))
     for record in records:
         history = np.asarray(record["objective_history"], dtype=np.float64)
         times = record.get("time_history")
@@ -352,16 +360,19 @@ def plot_convergence(
         label = record["method"]
         if record.get("variant"):
             label = f"{label}:{record['variant']}"
-        axis.plot(x_values, history, label=label)
+        # Normalise by the group best and clip the cold-start transient: the raw
+        # histories span six orders of magnitude and hide the converged band.
+        normalised = history / best if best else history
+        keep = np.isfinite(normalised) & (normalised <= 3.0)
+        axis.plot(x_values[keep], normalised[keep], label=label, linewidth=1.4)
         axis.set_xlabel(x_label)
-    axis.set_ylabel("weighted objective")
-    # Cold starts and stochastic warm-start transients are orders of magnitude
-    # above the converged band, so a linear axis hides the whole comparison.
+    axis.set_ylabel("objective / group best")
     axis.set_yscale("log")
-    finals = [float(record["objective"]) for record in records if record.get("objective")]
-    if finals:
-        axis.axhline(min(finals), color="0.45", linestyle=":", linewidth=0.9,
-                     label="group best objective")
+    axis.set_ylim(0.999, 3.2)
+    axis.axhline(1.0, color="0.45", linestyle=":", linewidth=0.9,
+                 label="group best objective")
+    axis.axhline(1.0 + tolerance, color="#A02337", linestyle="--", linewidth=0.9,
+                 label=f"tolerance {tolerance:g}")
     axis.set_title(
         f"{experiment}: objective vs time (ratio {cost_ratio}, seed {seed})"
     )

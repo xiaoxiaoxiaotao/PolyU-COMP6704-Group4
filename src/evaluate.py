@@ -1445,6 +1445,13 @@ def _assign_reference_objectives(
 ) -> None:
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for record in results:
+        if (
+            record.get("objective_recomputable") is None
+            and record.get("objective_recomputed") is not None
+        ):
+            # Older runs predate the explicit flag; the recomputed objective is
+            # what it denotes, so persist the derived value with the references.
+            record["objective_recomputable"] = True
         if record.get("status") != "ok" or record.get("objective") is None:
             continue
         if record.get("objective_recomputable") is False:
@@ -1974,6 +1981,14 @@ def pairwise_wilcoxon_tests(
                     for field in comparability_fields:
                         left = merged[f"{field}_a"]
                         right = merged[f"{field}_b"]
+                        if field == "objective_recomputable":
+                            # Only an explicit False removes a run; a missing
+                            # flag (older run) must not silently drop the pair.
+                            comparable &= ~(
+                                left.eq(False).fillna(False)
+                                | right.eq(False).fillna(False)
+                            )
+                            continue
                         comparable &= left.notna() & right.notna() & left.eq(right)
                     metric_rows = merged[comparable]
                     if metric_rows.empty:
@@ -2026,6 +2041,13 @@ def aggregate_runs(
         with path.open("r", encoding="utf-8") as handle:
             record = json.load(handle)
         record.setdefault("run_file", str(path))
+        # Runs written before the explicit flag existed still carry the
+        # recomputed objective, which is what the flag denotes.
+        if (
+            record.get("objective_recomputable") is None
+            and record.get("objective_recomputed") is not None
+        ):
+            record["objective_recomputable"] = True
         records.append(record)
 
     runs_frame = pd.DataFrame([_record_for_csv(record) for record in records])
