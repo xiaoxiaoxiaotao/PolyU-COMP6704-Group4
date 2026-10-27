@@ -287,6 +287,11 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
   `adaptive_rho=true`, `alpha=1`, `max_iter=20000`; the fixed-rho cold baseline remains the
   `admm-cold` variant in the ablation. Report `converged`/gap and never present an unconverged
   fit as a converged speed record.
+- **SMO keeps its default update cap (decided).** On the full data SMO exhausted
+  `max_iter=100000` in 15/15 fits after ~1390 s of the 5400 s budget and finished ~1.2–1.8%
+  above the group-best objective, so it never reached the 1e-3 tolerance; the same cap binds on
+  7/9 `main_fast` fits. This is reported as a scalability limit of SMO under the shared
+  protocol, not as a timeout, and the cap is deliberately not raised for a time-matched rerun.
 - Per-fit time budget and hard timeout are both **5400 s (90 minutes)**. Timeout/OOM is recorded
   as a failure; do not drop it silently. Solver C-grid tuning is included in
   `tuning_fit_time_sec`, separate from the selected fit's `fit_time_sec`.

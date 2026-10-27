@@ -964,10 +964,15 @@ def main() -> None:
            "IV · 07")
     add_picture(slide, figures / "p4_speed.png", 0.55, 1.62, 11.6)
     ttol_bits = []
+    never_reached = []
     for method in methods_full:
-        entry = summary_full.get((method, 20.0))
-        if entry:
-            ttol_bits.append(f"{METHOD_LABELS[method]} {fmt(entry['ttol'], '{:.0f}')}s")
+        value = summary_full.get((method, 20.0))
+        if not value:
+            continue
+        if math.isfinite(value["ttol"]):
+            ttol_bits.append(f"{METHOD_LABELS[method]} {value['ttol']:.0f}s")
+        else:
+            never_reached.append(METHOD_LABELS[method])
     hard_bits = ", ".join(
         f"{METHOD_LABELS.get(method, method)} {value['converged']}/{value['n']}"
         for method, value in sorted(hard_regime.items())
@@ -978,17 +983,28 @@ def main() -> None:
         "certifies the most seeds there."
         if best_hard_method else ""
     )
-    cap_note = (
-        f" SMO exhausted its own 100,000-update limit on {smo_full['capped']} of "
-        f"{smo_full['n']} main_full fits after {smo_full['fit']:.0f}s of a "
-        f"{smo_full['budget']:.0f}s budget"
-        + (f" ({smo_fast['capped']}/{smo_fast['n']} already at 35k)" if smo_fast else "")
-        + ": that 'not converged' flag is an iteration-cap outcome, not a wall-clock timeout."
-        if smo_full else ""
-    )
+    cap_note = ""
+    if smo_full:
+        smo_gaps = []
+        for ratio in RATIOS:
+            value = summary_full.get(("smo", ratio))
+            if value and math.isfinite(value["gap"]):
+                smo_gaps.append(value["gap"])
+        cap_note = (
+            f" SMO exhausted its own 100,000-update limit on {smo_full['capped']} of "
+            f"{smo_full['n']} main_full fits after {smo_full['fit']:.0f}s of a "
+            f"{smo_full['budget']:.0f}s budget"
+            + (f" ({smo_fast['capped']}/{smo_fast['n']} already at 35k)" if smo_fast else "")
+            + (f", finishing {st.mean(smo_gaps):.1%} above the group-best objective"
+               if smo_gaps else "")
+            + ". We keep its default cap and report this as a scalability limit of SMO under "
+            "this protocol, not a wall-clock timeout."
+        )
     add_text(slide, 0.58, 4.45, 11.6, 1.5,
-             "At 20:1 on the full data, median time-to-tolerance: " + ", ".join(ttol_bits) +
-             ". Final fit time is dominated by iterating past the tolerance line until the "
+             "At 20:1 on the full data, median time-to-tolerance: " + ", ".join(ttol_bits)
+             + (f". {' and '.join(never_reached)} never reached the tolerance at 20:1."
+                if never_reached else ".")
+             + " Final fit time is dominated by iterating past the tolerance line until the "
              "solver's own certificate (KKT / residual + duality gap) is satisfied."
              f"\nRight panel counts certified seeds at the hardest ratio 50:1 → {hard_bits}."
              f"{hardest_line}{cap_note}",
@@ -1222,8 +1238,8 @@ def main() -> None:
             f"{smo_full['n']} main_full fits after {smo_full['fit']:.0f}s of a "
             f"{smo_full['budget']:.0f}s budget"
             + (f" ({smo_fast['capped']}/{smo_fast['n']} at 35k)" if smo_fast else "")
-            + ". Raising that cap for a time-matched comparison is an open protocol "
-              "decision with WP2.")
+            + ". Decision: keep SMO's default cap and report this as a scalability limit of "
+              "SMO under the shared protocol, not as a timeout.")
     unreferenced = sum(1 for record in primary
                        if record["status"] == "ok"
                        and record.get("reference_objective") is None)

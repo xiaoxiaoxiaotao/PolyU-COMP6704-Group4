@@ -1,6 +1,6 @@
 # PART IV results summary (generated)
 
-Generated 2026-10-27 01:47 from 102 recorded fits. Results exist for ADMM, PA-ADMM, SMO.
+Generated 2026-10-27 10:11 from 102 recorded fits. Results exist for ADMM, PA-ADMM, SMO.
 Still pending: CVXPY, Pegasos.
 
 ## Data and protocol
@@ -79,7 +79,7 @@ The largest between-solver PR-AUC gap is 0.004 while the typical seed-to-seed sd
 
 ## Protocol caveats
 
-- SMO stopped at its own 100,000-update cap on 15/15 main_full fits after 1393s of a 5400s budget (7/9 at 35k). Raising that cap for a time-matched comparison is an open protocol decision with WP2.
+- SMO stopped at its own 100,000-update cap on 15/15 main_full fits after 1393s of a 5400s budget (7/9 at 35k). Decision: keep SMO's default cap and report this as a scalability limit of SMO under the shared protocol, not as a timeout.
 - No results for CVXPY, Pegasos; the ranking is not the final five-method comparison.
 
 Coverage on main_full: complete
