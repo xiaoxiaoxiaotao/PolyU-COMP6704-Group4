@@ -70,7 +70,7 @@ def load_runs(root: Path, experiment: str) -> list[dict]:
 
 def method_order(runs: list[dict]) -> list[str]:
     seen = {run["method"] for run in runs}
-    return [m for m in ("smo", "pegasos", "admm", "pa_admm", "cvxpy") if m in seen]
+    return [m for m in ("smo", "pegasos", "admm", "pa_admm") if m in seen]
 
 
 def cells(runs: list[dict], method: str, ratio) -> list[dict]:
@@ -660,7 +660,7 @@ def main() -> None:
     summary_full = summarize(primary)
     methods_full = method_order(primary)
     pending = sorted(
-        {"smo", "pegasos", "admm", "pa_admm", "cvxpy"} - set(
+        {"smo", "pegasos", "admm", "pa_admm"} - set(
             m for runs_list in runs.values() for m in method_order(runs_list)))
 
     # Claims below are derived from the recorded runs, never typed in by hand.
