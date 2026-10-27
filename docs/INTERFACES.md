@@ -1,4 +1,4 @@
-# Solver Interface — WP2 (SMO) and WP3 (ADMM / PA-ADMM)
+# Solver Interface — WP2 (SMO), WP3 (ADMM / PA-ADMM), WP4 (Pegasos)
 
 This is the contract between the evaluation harness (WP4) and the solver owners.
 It follows the interface in the research proposal and `EXPERIMENTS.md`. **The data
@@ -17,20 +17,26 @@ Implement the module/class pair expected by the registry:
 | Registry key | Module | Class | Owner |
 |---|---|---|---|
 | `smo` | `src/svm_smo.py` | `SMO` | WP2 |
-| `pegasos` | `src/svm_pegasos.py` | `Pegasos` | WP1 |
+| `pegasos` | `src/svm_pegasos.py` | `Pegasos` | WP4 |
 | `admm` | `src/svm_admm.py` | `ADMMSVM` | WP3 |
 | `pa_admm` | `src/svm_admm.py` | `PAADMMSVM` | WP3 |
-| `cvxpy` | `src/baseline_cvxpy.py` | `CVXPYLinearSVM` | WP1 |
+
+`Pegasos` was landed by WP4 in-house so the four-solver ladder is complete; the
+planned `cvxpy` reference baseline (`src/baseline_cvxpy.py`) was dropped — the
+harness has no synthetic/external baseline to compare against and no result is
+fabricated for one. Objective references come from the best observed run in each
+comparison group (see §4).
 
 Then, from the repository root:
 
 ```bash
 # 1) contract check on synthetic data (fast, no raw data needed)
 .venv/bin/python experiments/check_solver.py --method smo
+.venv/bin/python experiments/check_solver.py --method pegasos
 .venv/bin/python experiments/check_solver.py --method admm
 .venv/bin/python experiments/check_solver.py --method pa_admm
 
-# 2) correctness run (10k subset; needs cvxpy too)
+# 2) correctness run (10k subset)
 .venv/bin/python experiments/run_correctness.py --config configs/correctness.yaml --dry-run
 .venv/bin/python experiments/run_correctness.py --config configs/correctness.yaml
 
@@ -41,10 +47,10 @@ Then, from the repository root:
 .venv/bin/python experiments/run_main.py --config configs/main_full.yaml
 ```
 
-`main_full` gives all five methods the full training set; if SMO/CVXPY
-time out or OOM, the failure is recorded and the all-five fair fallback is
-`main_capped` on the common 10k subset. No method gets a different training
-subset inside one comparison.
+`main_full` gives all four methods the full training set; if SMO reaches its
+iteration cap or times out, the failure is recorded and the all-four fair
+fallback is `main_capped` on the common 10k subset. No method gets a different
+training subset inside one comparison.
 
 `check_solver.py` exits `0` only when the contract passes. Its JSON report is
 written to `results/raw/solver_checks/{method}.json` (ignored by Git).
@@ -90,7 +96,7 @@ Data facts (already verified and committed):
 The harness constructs every solver with **no required constructor arguments**:
 
 ```python
-model = SMO()                 # or ADMMSVM(), PAADMMSVM(), Pegasos(), CVXPYLinearSVM()
+model = SMO()                 # or ADMMSVM(), PAADMMSVM(), Pegasos()
 model.fit(X, y, C_per_sample, **kwargs)
 ```
 
@@ -154,7 +160,7 @@ The harness reads these. Keep them JSON-friendly (Python/NumPy scalars/arrays).
 
 Optional but useful: `residual_history`, `kkt_violation_history`, iterate
 averages, support-vector indices. The harness ignores unknown attributes.
-A non-iterative solver (for example CVXPY) can report a single-point
+A non-iterative solver can report a single-point
 `objective_history=[objective]` and `time_history=[fit_time_sec]`; it will still
 have a well-defined final objective, but `time_to_tolerance` is set to `null`
 (not a full-fit-time proxy) because a single point has no crossing resolution.
@@ -180,9 +186,11 @@ relative_gap_k = (J_k - J_ref) / |J_ref|
 time_to_tolerance = t_k at the first k with relative_gap_k <= tol
 ```
 
-where `J_ref` is CVXPY in correctness runs and the best observed canonical
-objective in the same `(dataset, ratio, eval ratio, seed, n_train, selected C)`
-group otherwise. The selected `C` is part of the grouping key because changing
+where `J_ref` is the best observed canonical objective in the same `(dataset,
+ratio, eval ratio, seed, n_train, selected C)` group. Every committed config
+leaves `reference_method: null`; there is no external or in-harness reference
+solver, so the group best is the reference by construction. The selected `C` is
+part of the grouping key because changing
 `C` defines a different QP; runs with different selected `C` are never compared
 on objective, relative gap, or time-to-tolerance. A run also has to expose a
 canonical objective the harness can recompute from `w,b`: a nonlinear model
@@ -251,12 +259,12 @@ override the config. The harness merges `method_kwargs.<method>` into `fit`.
 | Method | Typical `method_kwargs` |
 |---|---|
 | SMO | `max_iter`, `kernel` (linear for main), `cache_size_mb`, KKT/working-set options |
-| Pegasos | `lambda_`, `epochs`, `mini_batch`, `average` |
+| Pegasos | `epochs`, `batch_size` (minibatch size), `log_every` (checkpoint period). `lambda` is **not** configurable: it is derived as `1 / sum_i C_i` so Pegasos optimizes exactly the harness objective at the configured `C`. |
 | ADMM | `rho0`, `adaptive_rho`, `alpha` (over-relaxation), `max_iter` |
-| PA-ADMM | `K` (Pegasos warm-start epochs), `rho0`, `adaptive_rho`, `alpha` |
-| CVXPY | `solver`, `time_limit`, `verbose` |
+| PA-ADMM | `K` (the solver's own internal warm-start epochs), `rho0`, `adaptive_rho`, `alpha` |
 
-The ablation config already sets the required grid:
+`PA-ADMM`'s `K` warm start is internal to `src/svm_admm.py` and is unrelated to
+the registered `pegasos` solver; the ablation config already sets the required grid:
 `K ∈ {0,5,10,20}`, adaptive ρ on/off, `alpha ∈ {1.0,1.5,1.8}`,
 `rho0 ∈ {0.1,1,10}`. PA-ADMM must count the warm-start cost inside `fit` and
 inside `time_history`.
@@ -282,11 +290,17 @@ The harness owns this protocol; solvers should not duplicate it:
 
 ### Correctness reference
 
-`configs/correctness.yaml` uses CVXPY (`reference_method: cvxpy`) as the
-in-harness reference for ADMM/PA-ADMM. The SMO–LIBSVM agreement check remains
-WP2's responsibility; record LIBSVM's objective and accuracy separately and
-compare them with the SMO run. The harness deliberately does not add a sixth
-method or fabricate a LIBSVM result.
+`configs/correctness.yaml` runs all four registered solvers on the same 10k
+subset with `reference_method: null`, so the reference objective is the best
+observed canonical objective in the group and the check is a **mutual agreement**
+test between SMO, ADMM, PA-ADMM and Pegasos rather than an agreement with an
+external exact solver. The SMO–LIBSVM agreement check remains WP2's
+responsibility; record LIBSVM's objective and accuracy separately and compare
+them with the SMO run (`docs/member2_handoff.md`). The harness deliberately does
+not add a fifth method or fabricate a LIBSVM/CVXPY result.
+Pegasos is expected to be the outlier: it is a first-order method, so it agrees
+in *ranking* and predictive behavior but can sit above the exact solvers'
+objective without having hit a stopping certificate.
 
 ### Reproducibility and audit fields
 
@@ -391,7 +405,7 @@ class ADMMSVM(BaseBinarySVM):
             time_budget_sec=5400.0, rho0=1.0, adaptive_rho=True,
             alpha=1.6, max_iter=10000, **kwargs):
         X, y, C = validate_training_data(X, y, C_per_sample)
-        # ... optional Pegasos warm start for PA-ADMM ...
+        # ... optional internal warm start (K epochs) for PA-ADMM ...
         # ... ridge (w,b) update, z update with C[i]/rho, dual update ...
         self.w = ...
         self.b = ...
@@ -450,8 +464,19 @@ PA-ADMM inherits or shares the ADMM loop and additionally sets
   budgets, so the ranking stays like-for-like. `run_member2.py` currently calls
   the private `src.evaluate._build_ulb_data`; if that helper changes, WP4 must
   update the runner or move it onto a public entry point.
-- Solver modules (`src/svm_pegasos.py`, `src/baseline_cvxpy.py`) and
-  `src/costs.py` remain pending.
+- WP4 landed `src/svm_pegasos.py` (`Pegasos`, weighted minibatch Pegasos) so the
+  four-solver ladder is complete. Two conventions solver owners should note: the
+  regularization parameter is **derived** from `C_per_sample`
+  (`lambda = 1 / sum_i C_i`) instead of being tuned, and `converged` is always
+  `False` with `optimality_certificate = "none (first-order method, no duality
+  gap)"` — a first-order method has no certificate, and epoch stagnation is not
+  convergence. The returned model is the lowest measured **averaged** checkpoint.
+  See `tests/test_pegasos.py`, which validates it against LIBSVM's `svm_traintest`
+  dual objective on synthetic data.
+- Solver module `src/costs.py` remains pending (WP1). The CVXPY reference
+  baseline (`src/baseline_cvxpy.py`) was dropped by team decision: the main
+  ladder compares the four registered solvers against each other, and the
+  harness never substitutes a reference it did not run.
 - `run_correctness`/`run_main` will skip missing methods and write no fake
   results. `check_solver.py` reports a clear missing-module error.
 - The committed split files must not be changed. If you believe a split bug

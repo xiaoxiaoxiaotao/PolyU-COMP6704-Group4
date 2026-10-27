@@ -13,9 +13,9 @@ The proposal is in [`docs/proposal/COMP6704_Group4_SVM_Research_Proposal.pdf`](d
 Credit-card fraud detection is a binary decision with **0.172% positives**, **asymmetric
 costs** (a missed fraud costs more than a false alarm), **noisy labels**, and a **training
 time budget**. We model it as a **cost-sensitive soft-margin SVM**: a convex QP with
-class-dependent penalties `C_i = C * w_{y_i}` and `w_+ / w_- = c_FN / c_FP`. We compare five
-solvers — SMO, weighted Pegasos, fixed-ρ ADMM, PA-ADMM (Pegasos-warm-started adaptive ADMM),
-and a CVXPY/ECOS interior-point baseline — under one protocol. The primary metric is
+class-dependent penalties `C_i = C * w_{y_i}` and `w_+ / w_- = c_FN / c_FP`. We compare four
+solvers — SMO, weighted Pegasos, fixed-ρ ADMM and PA-ADMM (Pegasos-warm-started adaptive
+ADMM) — under one protocol; the CVXPY/ECOS interior-point baseline was dropped from the matrix. The primary metric is
 **time-to-cost-tolerance**, not accuracy.
 
 There is **one application only**: the ULB credit-card dataset. Synthetic data are controlled
@@ -176,9 +176,9 @@ class BinarySVM:
 | `src/costs.py` | Cost matrix, normalized class weights, per-sample `C_i`, expected cost | WP1 |
 | `src/metrics.py` | Cost per example, PR-AUC, recall@FPR, balanced accuracy, cost-minimizing threshold, bootstrap CI, Wilcoxon test | WP4 |
 | `src/svm_smo.py` | SMO / dual coordinate descent with per-class bounds; linear + optional RBF; kernel cache; KKT stopping; recover `w`, `b` | WP2 |
-| `src/svm_pegasos.py` | Weighted Pegasos: primal stochastic subgradient, learning-rate schedule, optional iterate averaging | WP1 |
+| `src/svm_pegasos.py` | Weighted minibatch Pegasos: primal stochastic subgradient, warm-up learning-rate schedule, averaged iterate | WP4 (stand-in for WP1) |
 | `src/svm_admm.py` | Fixed-ρ ADMM and PA-ADMM: ridge solve, closed-form z-update, residuals, adaptive ρ, over-relaxation, warm start | WP3 |
-| `src/baseline_cvxpy.py` | CVXPY/ECOS cost-sensitive linear SVM on a stratified subset | WP1 |
+| `src/baseline_cvxpy.py` | CVXPY/ECOS cost-sensitive linear SVM baseline — **dropped from the experiment matrix**, module not implemented | WP1 (dropped) |
 | `src/evaluate.py` | Unified fit/evaluate runner, time-to-tolerance, threshold selection, JSON logging, aggregation | WP4 |
 | `src/solver_api.py` | Solver protocol, validation helpers, base class, contract checker | WP4 |
 | `src/utils.py` | YAML loading/merging, seeding, timer, logger, single-thread configuration | Shared |
@@ -195,14 +195,22 @@ class BinarySVM:
 - Recover `w = sum alpha_i y_i x_i`; recover `b` from free support vectors.
 - Log objective and KKT violation histories.
 
-#### Weighted Pegasos (WP1)
+#### Weighted Pegasos (implemented by WP4 as a stand-in for WP1)
 
-- Primal objective: `0.5||w||^2 + sum C_i max(0, 1 - y_i(w^T x_i + b))`.
-- Update when `y_i f(x_i) < 1`:
-  `w <- (1 - eta_t * lambda) w + eta_t * C_i * y_i * x_i`,
-  `b <- b + eta_t * C_i * y_i`.
-- `eta_t = 1 / (lambda * t)`; document how `lambda` is tied to `C` and `n`.
-- Record objective history; optional iterate averaging; full-data and mini-batch modes.
+- Primal objective: `0.5||w||^2 + sum C_i max(0, 1 - y_i(w^T x_i + b))`, with `C_i` used as
+  supplied (no second application of class costs).
+- Dividing by `S = sum C_i` gives the Pegasos form with `lambda = 1 / S` and per-sample weights
+  `a_i = C_i / mean(C)`; the update is
+  `w <- (1 - eta_t * lambda) w + eta_t * (1/B) sum_B a_i y_i x_i`, `b <- b + eta_t * (1/B) sum_B a_i y_i`
+  for the active samples, and `||w||` is projected to `sqrt(2S)` because `P(0,0) = S`.
+- `eta_t = 1 / (lambda * (t0 + t))` with `t0 = 1 / lambda`. The textbook `eta_1 = 1/lambda = S`
+  is of order `n` and destroys the unregularized intercept on the first update, so the schedule
+  starts from `t0` and only approaches `1/(lambda t)` later.
+- The **averaged** iterate is what gets evaluated and returned (Pegasos's rate is stated for the
+  average; the raw iterate oscillates), and checkpoints are taken per epoch.
+- `converged` stays `False`: this is a first-order method with no duality gap available, so
+  epoch stagnation is never reported as convergence. Runtime is bounded by `epochs` or the
+  wall-clock budget, whichever comes first.
 
 #### ADMM and PA-ADMM (WP3)
 
@@ -218,18 +226,19 @@ class BinarySVM:
 - PA-ADMM: weighted Pegasos warm start (`K` epochs), then the adaptive ADMM loop.
 - Log `rho_history`, residuals, objective history.
 
-#### CVXPY baseline (WP1)
+#### CVXPY baseline (dropped)
 
-- Primal cost-sensitive SVM with per-sample `C_i`; ECOS solver (fallback SCS).
-- Runs on the same training rows as the other methods; no subset cap. At full n it may be
-  infeasible/time out; the failure is recorded. `main_capped` is the fair all-five fallback.
-- Returns `w`, `b`, objective, solver status/solve time.
+- The CVXPY/ECOS interior-point baseline is out of the matrix: `src/baseline_cvxpy.py` is not
+  implemented and `cvxpy` is no longer listed in any config. Correctness instead uses the best
+  observed objective among the registered solvers as the reference, plus each member's own
+  external cross-check (WP2 vs LIBSVM). The registry entry is kept so the method can be revived
+  without touching the harness.
 
 ### 4.4 Experiment entry points under `experiments/`
 
 | File | Runs |
 |---|---|
-| `run_correctness.py` | SMO vs LIBSVM; ADMM/PA-ADMM vs CVXPY on a 10k subset |
+| `run_correctness.py` | Four-solver objective agreement on a 10k subset (reference = best observed); WP2 verifies SMO vs LIBSVM separately |
 | `run_main.py` | `main_fast` (50k, 3 seeds), `main_full` (283,726 cleaned, 5 seeds), `main_capped` (common 10k, 3 seeds), and `predictive` (validation-tuned C on the common 10k) |
 | `run_cost_sweep.py` | Cost ratios `1, 3, 5, 10, 20, 50` on a 50k subset |
 | `run_ablation.py` | PA-ADMM component ablation |
@@ -249,11 +258,11 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 
 | ID | Data | Methods | Cost ratios | Seeds | Purpose |
 |---|---|---|---|---|---|
-| `correctness` | 10k stratified subset | SMO vs LIBSVM; ADMM/PA-ADMM vs CVXPY | 10:1 | 1 | Verify objectives, KKT/residuals, predictions |
-| `main_fast` | 50k stratified subset | all five on the same 50k | 10, 20, 50 | 3 | Fast iteration; debug the matrix |
-| `main_full` | full cleaned ULB (283,726; train 198,608) | all five on the same full training set | 10, 20, 50 | 5 | Full-data comparison; SMO/CVXPY may fail |
-| `main_capped` | common 10k subset | all five on the same 10k | 10, 20, 50 | 3 | Fair all-method fallback if full SMO/CVXPY fail |
-| `predictive` | common 10k subset | all five on the same 10k | 10, 20, 50 | 3 | Validation-tuned `C`; predictive/operational metrics only |
+| `correctness` | 10k stratified subset | four-way mutual agreement (SMO, Pegasos, ADMM, PA-ADMM); SMO vs LIBSVM is WP2's own run | 10:1 | 1 | Verify objectives, KKT/residuals, predictions |
+| `main_fast` | 50k stratified subset | all four on the same 50k | 10, 20, 50 | 3 | Fast iteration; debug the matrix |
+| `main_full` | full cleaned ULB (283,726; train 198,608) | all four on the same full training set | 10, 20, 50 | 5 | Full-data comparison; SMO may hit its iteration cap |
+| `main_capped` | common 10k subset | all four on the same 10k | 10, 20, 50 | 3 | Fair all-method fallback if full-data SMO is cap-limited |
+| `predictive` | common 10k subset | all four on the same 10k | 10, 20, 50 | 3 | Validation-tuned `C`; predictive/operational metrics only |
 | `cost_sweep` | 50k subset | Pegasos, ADMM, PA-ADMM | 1, 3, 5, 10, 20, 50; **evaluated at fixed 20:1** | 1 | How training-weight asymmetry changes a common-cost deployment metric |
 | `ablation` | full data | PA-ADMM variants | 20:1 | 3 | `K ∈ {0,5,10,20}`; adaptive ρ on/off; `alpha ∈ {1.0,1.5,1.8}`; `rho0 ∈ {0.1,1,10}` |
 | `stress_imbalance` | training prevalence adjusted to 0.1/0.5/1/5/10% (positive or negative subsampling, recorded) | Pegasos, ADMM, PA-ADMM | 20:1 | 3 | Extreme-imbalance behaviour |
@@ -265,15 +274,16 @@ grids, tolerances and time budgets in YAML rather than hard-coding them.
 
 - **No per-method training cap.** Every method inside an experiment receives exactly the same
   `X_train`, `y_train`, split, and `C_i`. Mixed-size comparisons are not allowed.
-- `main_full` attempts all five methods on the full training set. SMO/CVXPY may time out or run
-  out of memory; those runs are recorded as failures and are not ranked. Successful methods are
+- `main_full` attempts all four methods on the full training set. SMO may hit its own
+  `max_iter` cap (recorded as `converged: false`, with the best primal still reported);
+  timeout or OOM is recorded as a failure and is not ranked. Successful methods are
   compared against each other on the same full data.
 - **`data.subset_n` counts TOTAL rows before the 70/15/15 split.** `main_capped` and
   `predictive` use `subset_n: 10000`, which is 7,000 training rows (12 frauds at
   subset_seed 0/seed 0), not 10,000 training rows; `main_fast` uses 50,000 rows and
   trains on 34,999.
-- `main_capped` is the fair all-five fallback on the common 10k-row subset; use it when
-  SMO/CVXPY cannot complete the full-data matrix.
+- `main_capped` is the fair all-four fallback on the common 10k-row subset; use it when
+  a solver cannot complete the full-data matrix.
 - **Fixed-QP rule for solver ranking.** `main_fast`, `main_full`, and `main_capped` fix
   `C_grid: [1.0]` for every method, so `objective`, `relative_gap`, and `time_to_tolerance`
   compare the same optimization problem. Validation-only threshold selection remains.
@@ -329,7 +339,9 @@ compared on objective, relative gap, or time-to-tolerance. `main_fast`, `main_fu
 
 ### 6.3 Reference objective
 
-- Correctness runs: CVXPY/LIBSVM reference.
+- Correctness runs: best observed objective in the group (`reference_method: null`), i.e. a
+  four-way mutual agreement check. WP2 additionally verifies SMO against LIBSVM with its own
+  runner; that external number is not imported into this matrix.
 - Full-data runs: the best observed training objective among the methods on the same split,
   the same training rows, and the **same selected `C`**. Groups with only one successful method
   at that `C` get no time-to-tolerance.
@@ -360,7 +372,9 @@ compared on objective, relative gap, or time-to-tolerance. `main_fast`, `main_fu
   enforces this: an objective that cannot be recomputed from `w,b` (nonlinear kernels have
   no `w`) is marked `objective_recomputable: false`, keeps its predictive metrics, and is
   excluded from reference, gap, time-to-tolerance, and objective-aggregation groups.
-- Pegasos: `C` grid and learning-rate/epoch settings.
+- Pegasos: `epochs: 5000`, `batch_size: 64` in `configs/base.yaml`; `lambda` is derived from
+  `C_per_sample` (`1 / sum_i C_i`) and is not a free knob, so Pegasos solves the same fixed
+  `C = 1` QP as the other three in the ranking configs.
 - ADMM/PA-ADMM: main configs use adaptive ρ, `rho0=1`, `alpha=1` (ADMM) / `1.6`
   (PA-ADMM), `max_iter=20000`; PA-ADMM also `K=10`. The fixed-rho control is the
   `admm-cold` ablation variant.
@@ -446,7 +460,7 @@ Additional audit fields in the implementation: `training_cost_ratio`, `evaluatio
 - Tables: one row per run; aggregated tables with mean/std and `n_seeds`.
 - Figures: convergence (objective vs time), time-to-tolerance bars, cost vs cost ratio,
   PR curves, recall@FPR, scaling (runtime/memory vs n), ρ sensitivity, and the
-  all-five `main_capped` comparison.
+  all-four `main_capped` comparison.
 - Final figures for the report go in `results/figures/`; slides reuse them.
   Member 4's deck is generated by `slides/build_part4_deck.py --template … --check`
   from these tables and the run JSONs (see `slides/README.md`); it is never
@@ -456,7 +470,7 @@ Additional audit fields in the implementation: `training_cost_ratio`, `evaluatio
 
 - Experiment IDs: `correctness`, `main_fast`, `main_full`, `main_capped`, `predictive`,
   `cost_sweep`, `ablation`, `stress_imbalance`, `stress_noise`, `temporal`, `scaling`.
-- Method IDs: `smo`, `pegasos`, `admm`, `pa_admm`, `cvxpy`.
+- Method IDs: `smo`, `pegasos`, `admm`, `pa_admm`.
 - Dataset IDs: `ulb`, `synthetic`.
 - Cost ratio: integer `c_FN/c_FP` (`ratio-20`).
 - Seed: `seed-0`, no padding.
@@ -475,7 +489,7 @@ Additional audit fields in the implementation: `training_cost_ratio`, `evaluatio
 
 | WP | Owner | Files | Branch |
 |---|---|---|---|
-| WP1 | Member 1 | `src/costs.py`, `src/svm_pegasos.py`, `src/baseline_cvxpy.py`, theory notes | `feat/costs-pegasos` |
+| WP1 | Member 1 | `src/costs.py`, theory notes; `src/svm_pegasos.py` was landed by WP4 as a stand-in and `src/baseline_cvxpy.py` is dropped | `feat/costs-pegasos` |
 | WP2 | Member 2 | `src/svm_smo.py`, SMO tests | `feat/smo` |
 | WP3 | Member 3 | `src/svm_admm.py`, ADMM/PA-ADMM tests | `feat/admm` |
 | WP4 | Member 4 | `src/data.py`, `src/metrics.py`, `src/evaluate.py`, `src/solver_api.py`, `experiments/`, `configs/`, results | `feat/eval` |
@@ -498,7 +512,9 @@ A work package is done when:
 
 - the module implements the documented interface;
 - unit tests pass on a small synthetic dataset;
-- correctness is checked against LIBSVM or CVXPY (objective/accuracy within tolerance);
+- correctness is checked against an external reference where one exists (LIBSVM for SMO,
+  run by the solver owner) and against the in-harness group best otherwise, with objective
+  and accuracy within tolerance;
 - a smoke run produces a JSON in `results/raw/` with all required fields;
 - the relevant section of this document is updated.
 
@@ -518,9 +534,11 @@ The whole project is done when:
 - **Cost ratios are assumptions:** the main ratio grid is illustrative. Report the full sweep
   and frame conclusions as sensitivity, not a deployment recommendation.
 - **SMO memory:** an explicit O(n²) kernel matrix is impossible at full n (~316 GB at 198k).
-  `main_full` still attempts SMO on the full data with a 90-minute hard timeout; if it fails,
-  that is a recorded finding. Use `main_capped` for the fair all-five 10k comparison; do not
-  silently substitute a capped run into the full-data ranking.
+  `main_full` still attempts SMO on the full data with a 90-minute hard timeout; the recorded
+  finding is that SMO stays inside the time budget but hits its own `max_iter` cap, so its
+  run is kept with `converged: false` and the best primal iterate. `main_capped` remains the
+  fair all-four 10k comparison; do not silently substitute a capped run into the full-data
+  ranking.
 - **ADMM's dense solve:** `d = 29` makes the 30×30 system cheap; do not extrapolate to
   high-dimensional data without a sparse-aware variant.
 - **Fixed-rho ADMM is only the ablation control:** the main configs use adaptive rho and a
@@ -543,14 +561,22 @@ The whole project is done when:
 - [x] Add the proposal PDF under `docs/proposal/`.
 - [x] Implement WP4 data/metric utilities, reproducible split files, evaluation harness,
       configs, experiment entry points, and the solver contract/checker.
-- [ ] Implement `src/costs.py`, `src/svm_pegasos.py`, and `src/baseline_cvxpy.py`
-      (WP1). WP2's `src/svm_smo.py` and WP3's `src/svm_admm.py` are merged.
-      Start with `docs/INTERFACES.md` and `experiments/check_solver.py`.
+- [x] Implement `src/svm_pegasos.py` (WP4 stand-in for WP1: weighted minibatch Pegasos with
+      derived `lambda`, averaged iterate, no convergence claim). WP2's `src/svm_smo.py` and
+      WP3's `src/svm_admm.py` are merged.
+- [ ] Implement `src/costs.py` (WP1). The `src/baseline_cvxpy.py` reference baseline is
+      dropped from the matrix by team decision; no CVXPY result is reported anywhere.
 - [x] ADMM preflight: main configs use adaptive rho with `max_iter=20000`; fixed-rho
       remains the `admm-cold` ablation control.
-- [ ] Run `correctness` and `main_fast` (blocked on solver modules).
+- [x] Run `correctness` (four-way agreement on the 10k subset; SMO/ADMM/PA-ADMM agree to
+      ~7.7e-5 relative, Pegasos sits above the exact solvers as a first-order method) and
+      `main_capped` / `main_fast` / `main_full`.
+- [ ] Complete the `pegasos` ladder (same three configs, `reuse_existing: true` so the
+      finished solvers are never refit) and re-aggregate.
 - [ ] Run `predictive` for validation-tuned predictive metrics; keep it separate from the
       fixed-C solver ranking.
-- [ ] Freeze configs and run `main_full`.
-- [ ] Produce final tables/figures; empty tables and "pending solver integration"
-      placeholder figures are already committed, and no final numbers are fabricated.
+- [x] Freeze the ranking configs (`C_grid: [1.0]`) and run `main_full` (45/45 runs ok, 0
+      timeouts; SMO is cap-limited at 35k/198k rows and is reported as such).
+- [x] Produce tables/figures and the generated PART IV deck from the run JSONs
+      (`experiments/finalize_results.py`, `slides/build_part4_deck.py --check`); no final
+      number is hand-written or fabricated.

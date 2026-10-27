@@ -51,7 +51,6 @@ METHOD_REGISTRY: dict[str, tuple[str, str]] = {
     "pegasos": ("src.svm_pegasos", "Pegasos"),
     "admm": ("src.svm_admm", "ADMMSVM"),
     "pa_admm": ("src.svm_admm", "PAADMMSVM"),
-    "cvxpy": ("src.baseline_cvxpy", "CVXPYLinearSVM"),
 }
 
 COSTS_SOURCE = "harness_placeholder_sample_mean"
@@ -1680,7 +1679,7 @@ def run_experiment(
     if not runnable_specs:
         logger.error(
             "No solver modules are available. Expected src/svm_smo.py, "
-            "src/svm_pegasos.py, src/svm_admm.py, or src/baseline_cvxpy.py. "
+            "src/svm_pegasos.py, or src/svm_admm.py. "
             "No fake results were produced."
         )
         return []

@@ -5,7 +5,7 @@
 # and time-to-tolerance are grouped by the selected C, so runs that chose
 # different QPs are never compared on objective values.
 experiment: predictive
-methods: [smo, pegasos, admm, pa_admm, cvxpy]
+methods: [smo, pegasos, admm, pa_admm]
 seeds: [0, 1, 2]
 cost_ratios: [10, 20, 50]
 C_grid: [0.01, 0.1, 1.0, 10.0, 100.0]

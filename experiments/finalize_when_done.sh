@@ -14,15 +14,21 @@ cd "$(dirname "$0")/.."
 PYTHON="${PYTHON:-.venv/bin/python}"
 TEMPLATE="${TEMPLATE:-}"
 DESKTOP_COPY="${DESKTOP_COPY:-}"
-PATTERN="${PATTERN:-run_main.py --config configs/main_full.yaml}"
+PATTERN="${PATTERN:-experiments/run_main.py}"
 LOG="results/logs/finalize_watch.log"
 POLL_SECONDS="${POLL_SECONDS:-300}"
 
 mkdir -p results/logs
 
 echo "watcher started $(date -Is) waiting for: ${PATTERN}" >> "${LOG}"
-while pgrep -f "${PATTERN}" > /dev/null; do
+# Require two consecutive empty polls so a gap between campaign stages cannot
+# be mistaken for the campaign having finished.
+while true; do
   sleep "${POLL_SECONDS}"
+  if ! pgrep -f "${PATTERN}" > /dev/null; then
+    sleep "${POLL_SECONDS}"
+    pgrep -f "${PATTERN}" > /dev/null || break
+  fi
 done
 echo "campaign finished $(date -Is); finalizing" >> "${LOG}"
 

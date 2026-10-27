@@ -1,6 +1,6 @@
 # Final comparison on the full cleaned ULB dataset.
 experiment: main_full
-methods: [smo, pegasos, admm, pa_admm, cvxpy]
+methods: [smo, pegasos, admm, pa_admm]
 seeds: [0, 1, 2, 3, 4]
 cost_ratios: [10, 20, 50]
 # Fixed across methods: the objective/time-to-tolerance comparison must solve

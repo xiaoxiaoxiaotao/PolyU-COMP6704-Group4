@@ -16,7 +16,13 @@ evaluation_cost_ratio: null
 
 method_kwargs:
   smo: {}
-  pegasos: {}
+  # Minibatch Pegasos: batch 64 reached the best objective per second on the
+  # real 7k subset. One epoch is a full pass, so the 90-minute budget, not the
+  # epoch count, is the binding limit at full scale. Checkpoints are per epoch
+  # and the averaged iterate is what gets evaluated; converged stays False.
+  pegasos:
+    epochs: 5000
+    batch_size: 64
   admm:
     rho0: 1.0
     adaptive_rho: false
@@ -26,11 +32,9 @@ method_kwargs:
     rho0: 1.0
     adaptive_rho: true
     alpha: 1.6
-  cvxpy: {}
 
-# If set, reference_objective is taken from this method (e.g. cvxpy in
-# correctness runs). Otherwise the best observed objective on the same
-# dataset/seed/ratio/n_train is used.
+# If set, reference_objective is taken from this method. Otherwise the best
+# observed objective on the same dataset/seed/ratio/n_train/C is used.
 reference_method: null
 
 data:

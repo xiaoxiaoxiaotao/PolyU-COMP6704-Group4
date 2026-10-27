@@ -41,7 +41,7 @@ from _common import build_config  # noqa: E402
 from src.evaluate import aggregate_runs, run_experiment  # noqa: E402
 from src.utils import get_logger  # noqa: E402
 
-ALL_METHODS = ("smo", "pegasos", "admm", "pa_admm", "cvxpy")
+ALL_METHODS = ("smo", "pegasos", "admm", "pa_admm")
 EXPERIMENTS = ("correctness", "main_capped", "main_fast", "main_full", "predictive")
 
 

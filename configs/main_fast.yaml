@@ -1,6 +1,6 @@
 # Fast iteration matrix on a 50k stratified subset.
 experiment: main_fast
-methods: [smo, pegasos, admm, pa_admm, cvxpy]
+methods: [smo, pegasos, admm, pa_admm]
 seeds: [0, 1, 2]
 cost_ratios: [10, 20, 50]
 # Fixed across methods for an identical QP; thresholds remain validation-only.

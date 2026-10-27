@@ -1,14 +1,15 @@
 # Objective/KKT agreement on a 10k stratified subset.
-# LIBSVM is an external reference owned by WP2; CVXPY is the in-harness
-# reference for ADMM/PA-ADMM until the SMO-LIBSVM comparison is supplied.
+# LIBSVM is an external reference owned by WP2. The CVXPY baseline was dropped
+# from the matrix, so the in-harness reference is the best observed objective
+# among the registered solvers.
 experiment: correctness
-methods: [smo, admm, pa_admm, cvxpy]
+methods: [smo, admm, pa_admm, pegasos]
 seeds: [0]
 cost_ratios: [10]
 C_grid: [1.0]
 tolerance: 0.0001
 time_budget_sec: 5400
-reference_method: cvxpy
+reference_method: null
 # Same ADMM/PA-ADMM configuration as the main ladder, so the agreement check
 # compares converged models. The fixed-rho cold control is the admm-cold
 # variant in configs/ablation.yaml.
@@ -27,7 +28,8 @@ data:
   use_saved_splits: false
 notes: >-
   Fixed C=1 and ratio 10:1 on 7,000 training rows. WP2 verifies SMO against
-  LIBSVM with its own runner (results/member2, not committed) and WP3 verifies
-  ADMM against CVXPY/ECOS; this experiment checks that the registered solvers
-  agree on the harness's own objective convention. No external result is
-  fabricated here.
+  LIBSVM with its own runner (results/member2, not committed); this experiment
+  checks that the registered solvers agree on the harness's own objective
+  convention, with the reference being the best observed objective. Pegasos is
+  included but never claims convergence (first-order method, no duality gap),
+  so agreement is judged on the measured objective, not on its converged flag.

@@ -2,7 +2,7 @@
 # subset_n counts TOTAL rows before the 70/15/15 split: 7,000 train / 1,500 val
 # / 1,500 test. Every method sees exactly the same rows and the same split.
 experiment: main_capped
-methods: [smo, pegasos, admm, pa_admm, cvxpy]
+methods: [smo, pegasos, admm, pa_admm]
 seeds: [0, 1, 2]
 cost_ratios: [10, 20, 50]
 # Fixed across methods for an identical QP; thresholds remain validation-only.

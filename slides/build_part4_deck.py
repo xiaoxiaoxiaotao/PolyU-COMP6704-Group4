@@ -47,10 +47,10 @@ HEX_RED = "#A02337"
 HEX_DARK = "#182B3A"
 HEX_GREY = "#526574"
 HEX_LIGHT = "#F2F4F6"
-METHOD_COLORS = {"smo": HEX_RED, "admm": "#3E6E8E", "pa_admm": "#E0A32E",
-                 "pegasos": "#7A5C9E", "cvxpy": "#8A9691"}
-METHOD_LABELS = {"smo": "SMO", "admm": "ADMM", "pa_admm": "PA-ADMM",
-                 "pegasos": "Pegasos", "cvxpy": "CVXPY"}
+METHOD_COLORS = {"smo": HEX_RED, "pegasos": "#7A5C9E", "admm": "#3E6E8E",
+                 "pa_admm": "#E0A32E"}
+METHOD_LABELS = {"smo": "SMO", "pegasos": "Pegasos", "admm": "ADMM",
+                 "pa_admm": "PA-ADMM"}
 RATIOS = (10, 20, 50)
 
 
@@ -887,23 +887,30 @@ def main() -> None:
         else "Correctness gate: solvers must agree before we compare speed"
     )
     uncertified = [METHOD_LABELS.get(m, m) for m, v in corr_detail.items() if not v["certified"]]
+    certified_count = sum(1 for v in corr_detail.values() if v["certified"])
     slide = content_slide(prs, body_layout, "Correctness first: solvers agree on one QP")
     chrome(slide, "PART IV  /  CORRECTNESS", correctness_takeaway,
            "configs/correctness.yaml · results/raw/correctness · "
-           "WP2 LIBSVM and WP3 CVXPY/ECOS cross-checks", "IV · 05")
+           "external cross-checks run by WP2 (LIBSVM) and WP3 (CVXPY/ECOS), not by this harness",
+           "IV · 05")
     add_picture(slide, figures / "p4_correctness.png", 0.55, 1.72, 6.4)
     add_text(slide, 7.15, 1.8, 5.7, 1.9, correctness_lines, size=12.5, color=DARK)
     add_text(slide, 7.15, 3.85, 5.7, 2.1,
              "One 10k stratified subset (7,000 train / 1,500 val / 1,500 test), C fixed to 1, "
-             "ratio 10:1, tolerance 1e-4. WP2 also checks SMO against LIBSVM and WP3 checks ADMM "
-             "against CVXPY/ECOS on identical rows."
-             + (f"\n\n{' and '.join(uncertified)} did not certify in this configuration "
-                "(cold fixed-ρ, 10,000-iteration cap) and is reported as unconverged rather "
-                "than smoothed away." if uncertified else ""),
+             "ratio 10:1, tolerance 1e-4. WP2 checks SMO against LIBSVM and WP3 checks ADMM "
+             "against CVXPY/ECOS on identical rows, in their own runners."
+             + (f"\n\n{' and '.join(uncertified)} is reported as unconverged rather than "
+                "smoothed away: a first-order method has no primal-dual certificate, so we "
+                "never claim convergence for it."
+                if "Pegasos" in uncertified else
+                (f"\n\n{' and '.join(uncertified)} did not certify in this configuration "
+                 "(cold fixed-ρ, 10,000-iteration cap) and is reported as unconverged rather "
+                 "than smoothed away." if uncertified else "")),
              size=12.5, color=GREY)
     set_notes(slide,
-              "~45s: this slide answers 'are your solvers even correct?' — two independent "
-              "algorithms agreeing to four decimals, plus each member's external reference check.")
+              f"~45s: this slide answers 'are your solvers even correct?' — {certified_count} "
+              "independent algorithms agreeing to four decimals, plus each member's external "
+              "reference check.")
 
     # 6 - Matrix and coverage
     slide = content_slide(prs, body_layout, "The experiment matrix we ran")
@@ -919,7 +926,7 @@ def main() -> None:
     ):
         group = runs[name]
         per_method = []
-        for method in ("smo", "admm", "pa_admm"):
+        for method in method_order(group):
             count = len(cells(group, method, None))
             per_method.append(f"{METHOD_LABELS[method]}: {count}")
         rows.append([label, rows_desc, seeds,
@@ -932,8 +939,10 @@ def main() -> None:
     add_text(slide, 7.4, 4.15, 5.4, 1.9,
              "Ratios 10 / 20 / 50 are trained at their own weights; thresholds and test cost "
              "always use the deployment ratio of that run.\n\n"
-             f"{'Pegasos and the CVXPY baseline are still pending; their cells are reported as '
-             'skipped, not imputed.' if pending else 'All registered methods completed.'}",
+             f"{('Still pending: ' + ', '.join(METHOD_LABELS.get(m, m) for m in pending) + ' — '
+                'missing cells are reported as skipped, never imputed.'
+                if pending else 'All four registered solvers have recorded runs here; '
+                'incomplete cells are stated on the results slides.')}",
              size=12, color=GREY)
     set_notes(slide,
               "~45s: walk the ladder from 7k to 198k rows. Mention the reuse flag: earlier runs "
@@ -946,7 +955,7 @@ def main() -> None:
     full_coverage = ", ".join(
         f"{METHOD_LABELS.get(method, method)} "
         f"{len(cells(primary, method, None))}/{expected_full}"
-        for method in ("smo", "admm", "pa_admm")
+        for method in method_order(primary)
         if method in methods_full
     )
     coverage_suffix = (
@@ -1155,10 +1164,10 @@ def main() -> None:
            "experiments/check_solver.py · run_correctness.py · run_main.py · make_report_assets.py",
            "IV · 12")
     add_text(slide, 0.58, 1.75, 11.6, 3.2,
-             "1.  python experiments/check_solver.py --method smo|admm|pa_admm\n"
+             "1.  python experiments/check_solver.py --method smo|pegasos|admm|pa_admm\n"
              "     → results/raw/solver_checks/<method>.json (contract + diagnostics)\n\n"
              "2.  python experiments/run_correctness.py\n"
-             "     → 7,000-row agreement check, reference_method: cvxpy\n\n"
+             "     → 7,000-row agreement check, reference = group best (no external solver)\n\n"
              "3.  python experiments/run_main.py --config configs/main_capped.yaml\n"
              "                                       configs/main_fast.yaml\n"
              "                                       configs/main_full.yaml\n"
