@@ -7,6 +7,3 @@
 *.fdb_latexmk
 *.synctex.gz
 
-# local-only student identifiers and the submission build output
-groupauthors.tex
-Group4.pdf
