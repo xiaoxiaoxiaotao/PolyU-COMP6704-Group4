@@ -1,0 +1,12 @@
+# LaTeX build artefacts
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# local-only student identifiers and the submission build output
+studentids.tex
+Group4.pdf
