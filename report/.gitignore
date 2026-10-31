@@ -8,5 +8,5 @@
 *.synctex.gz
 
 # local-only student identifiers and the submission build output
-studentids.tex
+groupauthors.tex
 Group4.pdf

@@ -11,7 +11,7 @@
 \usepackage{hyperref}
 \hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=blue,
   pdftitle={Cost-Sensitive SVM for Credit Card Fraud Detection},
-  pdfauthor={Yao Zebin; Li Songtao; Wang Ziyi; Liu Weibin}}
+  pdfauthor={Group 4}}
 \newcommand{\RepositoryURL}{https://github.com/xiaoxiaoxiaotao/PolyU-COMP6704-Group4}
 \newcommand{\repositorynote}{Code repository: \expandafter\url\expandafter{\RepositoryURL}.}
 \makeatletter
@@ -31,20 +31,13 @@
 
 \title{Cost-Sensitive SVM for Credit Card Fraud Detection\\
 Comparing Convex Optimization Methods}
-% Student identifiers are deliberately absent from this file. They live in
-% studentids.tex, which is git-ignored: if that file is present the title page
-% prints name plus ID (the Canvas submission build), otherwise names only (the
-% public repository build). Nothing here contains an identifier to leak.
-\newif\ifStudentIDs
-\providecommand{\IDA}{}\providecommand{\IDB}{}\providecommand{\IDC}{}\providecommand{\IDD}{}
-\IfFileExists{studentids.tex}{\StudentIDstrue\input{studentids.tex}}{\StudentIDsfalse}
-
-\author{%
-  Yao Zebin\ifStudentIDs\\\IDA\fi
-  \And Li Songtao\ifStudentIDs\\\IDB\fi
-  \And Wang Ziyi\ifStudentIDs\\\IDC\fi
-  \And Liu Weibin\ifStudentIDs\\\IDD\fi
-}
+% Author names and student identifiers are deliberately absent from this file.
+% They live in groupauthors.tex, which git ignores. With that file present the title
+% page prints the real authors (the Canvas submission build); without it the build says
+% "Group 4" (the public repository build). No tracked file names anyone.
+\IfFileExists{groupauthors.tex}{\input{groupauthors.tex}}{%
+\author{Group 4\\[4pt]\small COMP6704 Advanced Topics in Optimization\\
+\small The Hong Kong Polytechnic University, Fall 2026}}
 
 \begin{document}
 \maketitle
